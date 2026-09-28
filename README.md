@@ -13,12 +13,14 @@ system built from what the corpus reveals, a uniqueness proof (or a concrete cou
 pair of hidden worlds), a reference solver, a naive baseline that fails on hidden deciding
 cases, and a byte-exact pytest grader.
 
-**What exists today** is the exact math that pipeline stands on and the uniqueness prover
-built on it: a constraint model, an exact solver that returns a unique world or a concrete
+**What exists today** is the exact math that pipeline stands on, the uniqueness prover
+built on it (a constraint model, an exact solver that returns a unique world or a concrete
 counterexample pair, JSON certificates with a standalone checker, a gate that extends a
-sample until the proof holds, and a CLI over all of it. Everything is pure Python 3.12
-integers (no floats, no numpy), implemented from scratch and property-tested against brute
-force and `sympy` (a dev-only oracle). The task families and the bundle exporter are on the
+sample until the proof holds), a task-family plugin API with canonical byte-exact writers,
+the first task family (an affine-scrambled ledger with a reference solver and a naive
+baseline that it traps), and a CLI over all of it. Everything is pure Python 3.12 integers
+(no floats, no numpy), implemented from scratch and property-tested against brute force and
+`sympy` (a dev-only oracle). The other two task families and the bundle exporter are on the
 [Roadmap](#roadmap).
 
 ## Why this exists
@@ -38,9 +40,12 @@ designs, examples and data here are original.
 | Uniqueness prover | `trapforge.prover.prove` | reduces every case to one Diophantine system (one slack per congruence), solves it with `solve_diophantine`, enumerates the lattice inside the box, and returns `UniqueProof`, `Ambiguity` (counterexample pair plus the exact size of the ambiguity space, or a capped lower bound) or `Infeasible` |
 | Certificates | `trapforge.prover.check_certificate` | canonical JSON certificate per verdict; a standalone checker (standard library only) re-verifies it without the solver: lattice point, kernel basis, integer right inverse and a nonsingular rank minor per solvable case, integer Fredholm weights per unsolvable case |
 | Uniqueness gate | `trapforge.prover.gate` | extends a generated sample with further observations, lazily, until exactly one world fits; stops at the shortest prefix, records the ambiguity size after each step, and raises on a planted world that breaks the sample |
-| CLI | `trapforge` | `crt`, `solve`, `system`, `prove` and `check` commands over the layers above, plus `info` |
+| Canonical writers | `trapforge.canonical` | byte-exact CSV, JSON and text writers (`\n` endings, sorted keys, ASCII, no floats, no CSV quoting: cells that would need it are rejected), a strict CSV reader, and a SHA-256 digest over a whole file set |
+| Task-family plugin API | `trapforge.families` | `TaskFamily` protocol (`generate`, `solve`, `baseline`), `TaskInstance` (corpus, hidden world, expected bytes, visible sample, constraint system), `Difficulty`, a validating `Registry`, and a string-seeded RNG so a (family, difficulty, seed) triple gives the same bytes in every process |
+| Affine ledger family | `trapforge.families.ledger` | account numbers scrambled by `x -> (a*x + b) mod m` with composite `m`; every instance is gated to a unique map; a reference solver built on linear congruences; a naive baseline that treats `m` as prime and is right on the visible sample, wrong on every hidden deciding record |
+| CLI | `trapforge` | `crt`, `solve`, `system`, `prove`, `check`, `families` and `generate` commands over the layers above, plus `info` |
 | Container | `Dockerfile` | multi-stage uv build on `python:3.12-slim` pinned by digest, non-root user, `LABEL project=trapforge` |
-| Demo | `make demo` | `scripts/demo.sh` runs the CLI over the bundled `examples/` inputs, locally or in the image |
+| Demo | `make demo` | `scripts/demo.sh` runs the CLI over the bundled `examples/` inputs and one generated task, locally or in the image |
 
 Every "no solution" answer comes with a certificate that can be re-checked without trusting
 the solver: a conflicting pair of congruences and a witness modulus, or integer weights `w`
@@ -58,7 +63,7 @@ make check     # ruff, mypy --strict, pytest with the 85% branch-coverage gate
 make demo      # the CLI end to end on examples/
 ```
 
-These five commands were run in a fresh clone: `make check` reported 330 passed at 100%
+These five commands were run in a fresh clone: `make check` reported 722 passed at 100%
 branch coverage, and the whole sequence (clone, sync, check, demo) took 39 s wall time on an
 Apple-silicon laptop. With Docker, `make docker-demo` builds the image and runs the same demo
 inside it.
@@ -70,17 +75,20 @@ The command list from `trapforge --help` (Typer draws it in a box; the frame is 
 ```text
 Usage: trapforge [OPTIONS] COMMAND [ARGS]...
 Commands:
-  info    Print the package version and the Python it runs on.
-  crt     Combine congruences with any moduli (coprime or not) into one residue class.
-  solve   Solve an integer system A x = b exactly and list its solutions inside a box.
-  system  Validate and print a constraint system; optionally test a candidate assignment.
-  prove   Decide how many hidden worlds fit a constraint system, with a re-checked certificate.
-  check   Re-check a uniqueness certificate from scratch, without running the solver.
+  info      Print the package version and the Python it runs on.
+  crt       Combine congruences with any moduli (coprime or not) into one residue class.
+  solve     Solve an integer system A x = b exactly and list its solutions inside a box.
+  system    Validate and print a constraint system; optionally test a candidate assignment.
+  prove     Decide how many hidden worlds fit a constraint system, with a re-checked certificate.
+  check     Re-check a uniqueness certificate from scratch, without running the solver.
+  families  List the registered task families.
+  generate  Generate one task instance, prove it unique and run its reference and baseline.
 ```
 
 Exit code 0 means the input was valid (with or without a solution); 1 means a check failed
 (`check` on a certificate that does not hold, `prove --require-unique` on a sample that is
-not unique); 2 means the input could not be read or parsed. The outputs below are copied from `make demo`.
+not unique, `generate` on an instance that is not unique, not reproduced by its reference
+solver or not missed by its baseline); 2 means the input could not be read or parsed. The outputs below are copied from `make demo`.
 
 **`crt`** combines congruences whose moduli share factors, or proves they conflict:
 
@@ -122,8 +130,8 @@ certificate re-checked: True
 ```
 
 **`system`** loads a constraint system in the prover's JSON format and tests candidate
-hidden worlds against it. The bundled ledger example is the trap the planned affine-ledger
-family is built around: with a composite modulus, two different affine maps fit every anchor.
+hidden worlds against it. The bundled ledger example is the trap the affine-ledger family
+is built around: with a composite modulus, two different affine maps fit every anchor.
 
 ```text
 $ trapforge system examples/ledger-anchors.json --check a=5 --check b=7
@@ -195,6 +203,32 @@ The lattice evidence in that certificate (an excerpt, indentation trimmed):
 The columns are `(a, b, s1, s2, s3)`, one slack per congruence. The basis moves `a` and `b`
 only in steps of 12, so the box `1 <= a <= 11, 0 <= b <= 11` holds the single point
 `a=5, b=7`; the rank-3 minor shows there are no further kernel directions.
+
+**`families`** and **`generate`** run the task-family registry. `generate` builds one
+instance, proves the constraint system its corpus implies, runs the reference solver and the
+naive baseline, and prints the instance's SHA-256; `--out DIR` writes its files.
+
+```text
+$ trapforge families
+affine-ledger: account numbers scrambled by x -> (a*x + b) mod m with composite m
+
+$ trapforge generate affine-ledger --seed 7
+affine-ledger / easy / seed 7
+  anchors: 4
+  deciding_records: 4
+  decoy_anchors: 0
+  modulus: 36
+  sample_records: 2
+  shared_factor: 4
+  transactions: 40
+  worlds_from_first_two_anchors: 4
+proof: unique: a=17, b=7 (certificate re-checked: True)
+reference: matches the expected output
+baseline: 4 of 7 output lines differ; matches the visible sample
+sha256: c91f178cc5830e227c04c9b436b7b79a1c0007286c33ef79aadb55a569471e4d
+```
+
+The same command inside the Linux image (`make docker-demo`) printed the same SHA-256.
 
 ## Library usage
 
@@ -275,8 +309,99 @@ passed after 2 more constraints (sizes 2, 2, 1): unique: a=5, b=7
 The anchor at `x=7` reads 6 under both maps, so it does not help; the gate keeps it (the
 sample is a prefix of the stream) and stops after `x=2`, which separates them.
 
+```python
+from trapforge.families import REGISTRY, Difficulty
+from trapforge.families.ledger import naive_map, recover_map
+from trapforge.prover import ConstraintSystem, prove
+
+family = REGISTRY.get("affine-ledger")
+instance = family.generate(7, Difficulty.EASY)
+print(instance.files["anchors.csv"].decode(), end="")
+
+# The first two anchors alone admit several maps; every anchor together admits one.
+first_two = ConstraintSystem(instance.system.unknowns, instance.system.constraints[:2])
+print(prove(first_two))
+print(prove(instance.system))
+
+# The reference solver uses every anchor; the naive one treats m = 36 as if it were prime.
+print(recover_map(instance.files), naive_map(instance.files))
+print(family.solve(instance.files) == instance.expected)
+print(family.baseline(instance.files) == instance.expected)
+```
+
+```text
+account,scrambled
+18,25
+10,33
+0,7
+1,24
+ambiguous: exactly 4 worlds fit, for example a=8, b=25 and a=17, b=7 (they differ in a, b)
+unique: a=17, b=7
+(17, 7) (8, 25)
+True
+False
+```
+
 All outputs above come from running the snippets with `uv run python`; the module docstrings
 carry more examples, and `tests/test_doctests.py` runs all of them so they cannot drift.
+
+## Task families
+
+A family implements the `TaskFamily` protocol: `generate(seed, difficulty)` returns a
+`TaskInstance` holding the corpus files, the planted hidden world, the byte-exact expected
+output, the visible sample of that output, and the `ConstraintSystem` the corpus implies about
+the hidden world (the planted world must satisfy it, or construction fails). `solve(files)`
+is the reference solver and `baseline(files)` the naive one; both see only the corpus. All
+randomness comes from `family_rng`, a `random.Random` seeded from a string (hashed with
+SHA-512, so `PYTHONHASHSEED` does not matter), and every file goes through
+`trapforge.canonical`. `TaskInstance.bundle()` lays the instance out as `data/`,
+`expected/`, `sample/` and `meta/` (instruction, planted world, constraint system), and
+`digest()` is SHA-256 over that bundle.
+
+### Affine-scrambled ledger (`affine-ledger`)
+
+A ledger export replaced every account number `x` by `(a*x + b) mod m`. `m` is published and
+composite; `a` (coprime to `m`) and `b` are hidden. The corpus has `params.json`,
+`anchors.csv` (accounts matched by hand, in the order they were confirmed), `ledger.csv`
+(transactions by scrambled account) and `queries.csv`; the answer is `balances.csv`.
+
+The trap is built in four steps:
+
+1. The first two anchors differ by a multiple of a factor `d` of `m`, so
+   `(x2 - x1)*a = y2 - y1 (mod m)` has `d` solutions for `a`. The planted `a` is drawn at or
+   above `m / d`, so the smallest solution, which is what a solver that treats `m` as prime
+   keeps, is always wrong.
+2. Decoy anchors (medium: 2, hard: 4) sit in the class of `x1` modulo `d`, where every
+   candidate map agrees, so they look informative and cut nothing.
+3. The uniqueness gate then reveals further anchors, one at a time, only until exactly one map
+   fits; the instance's constraint system is that gated sample.
+4. The visible sample of the answer shows accounts on which the naive map agrees with the
+   true one; the hidden deciding records are accounts on which it does not, and the ledger is
+   extended until every deciding record has a different balance under the two maps.
+
+For `trapforge generate affine-ledger --seed 7` (m = 36, d = 4), the expected output and
+the naive baseline's output:
+
+```text
+expected/balances.csv     naive baseline
+account,balance           account,balance
+7,-27586                  7,35624
+11,50565                  11,-87848
+12,75043                  12,-87600
+14,-12223                 14,-12223      <- visible sample
+26,-61484                 26,-61484      <- visible sample
+28,16902                  28,0
+```
+
+| Difficulty | Moduli | Shared factor `d` | Decoys | Active accounts / transactions (at least) | Sample / deciding records |
+| --- | --- | --- | --- | --- | --- |
+| easy | 24, 36, 40, 60 | 2 to 6 | 0 | 10 / 40 | 2 / 4 |
+| medium | 360, 420, 504, 720, 840 | 4 to 30 | 2 | 30 / 160 | 3 / 9 |
+| hard | 27720, 30030, 55440, 65520 | 12 to 120 | 4 | 80 / 640 | 4 / 20 |
+
+The prover's box `1 <= a <= m - 1, 0 <= b <= m - 1` does not encode "a is coprime to m"
+(that is not a linear constraint), so uniqueness is proved over a superset of the maps the
+instruction allows; the reference solver additionally keeps only units.
 
 ## Architecture
 
@@ -288,11 +413,13 @@ flowchart LR
         MODEL["prover.model<br/>unknowns, equations,<br/>congruences, case split"]
         SOLVER["prover.solver + gating<br/>UniqueProof / Ambiguity<br/>gate"]
         CERT["prover.certificate<br/>standalone checker<br/>(stdlib only)"]
-        CLI["cli (Typer)<br/>crt, solve, system,<br/>prove, check"]
+        CAN["canonical<br/>byte-exact writers,<br/>SHA-256 digests"]
+        FAM["families<br/>plugin API, registry,<br/>affine ledger"]
+        CLI["cli (Typer)<br/>crt, solve, system, prove,<br/>check, families, generate"]
         EX[("examples/*.json")]
     end
     subgraph planned["roadmap"]
-        FAM["task families<br/>ledger, clocks, warehouse"]
+        MORE["task families<br/>clocks, warehouse"]
         BUNDLE["bundle exporter<br/>+ verify in Docker"]
     end
     MOD --> CLI
@@ -304,7 +431,11 @@ flowchart LR
     SOLVER --> CLI
     CERT --> CLI
     EX --> CLI
-    SOLVER -.-> FAM
+    SOLVER --> FAM
+    MOD --> FAM
+    CAN --> FAM
+    FAM --> CLI
+    FAM -.-> MORE
     FAM -.-> BUNDLE
 ```
 
@@ -316,6 +447,10 @@ src/trapforge/
   prover/solver.py      exact per-case solver, verdicts and certificate writer
   prover/certificate.py standalone certificate checker (standard library only)
   prover/gating.py      the uniqueness gate
+  canonical.py          canonical byte-exact writers and SHA-256 digests
+  families/base.py      Difficulty, TaskInstance, the TaskFamily protocol, family_rng
+  families/registry.py  the family registry
+  families/ledger.py    the affine-scrambled ledger family
   cli.py                Typer CLI
 examples/               bundled JSON inputs for the CLI and the demo
 scripts/demo.sh         the end-to-end demo, runnable locally or in the image
@@ -327,12 +462,32 @@ Every number here comes from a command in this repo, run on the current tree.
 
 | Number | Value | Command |
 | --- | --- | --- |
-| Tests | 330 passed (39 CLI, 1 demo script, 9 doctest modules, 76 linalg, 89 modular, 116 prover: 41 model, 22 solver, 45 certificate, 8 gate) | `make cov` and `uv run pytest -q --co` |
+| Tests | 722 passed (49 CLI, 1 demo script, 13 doctest modules, 76 linalg, 89 modular, 116 prover, 28 canonical writers, 350 families: 26 plugin API, 324 affine ledger) | `make cov` and `uv run pytest -q --co` |
+| Ledger instances checked by the test suite | 73 (seeds 0-39 easy, 0-24 medium, 0-7 hard): each proved unique with a re-checked certificate, reproduced by the reference solver, missed by the baseline on every deciding record | `uv run pytest -q tests/test_family_ledger.py` |
+| Ledger instances through the CLI gate | 300 of 300 exit 0 (seeds 0-99 at each difficulty) | `for d in easy medium hard; do for s in $(seq 0 99); do uv run trapforge generate affine-ledger --seed $s --difficulty $d > /dev/null \|\| echo "FAIL $d $s"; done; done` |
+| Ledger generation time (gate proofs included) | median 0.7 ms easy, 2.2 ms medium, 16.1 ms hard; slowest 30.6 ms (seeds 0-99 each; varies a few ms between runs) | the timing snippet below |
 | Tampered certificates rejected | 40 hand-written tamperings, each with its expected reason | `uv run pytest -q tests/test_prover_certificate.py -k tampered` |
-| Branch coverage of `src/` | 100% (1481 statements, 476 branches); CI fails under 85% | `make cov` |
-| Demo wall time | 1.1 s for all 13 steps | `time make demo` |
+| Branch coverage of `src/` | 100% (1935 statements, 608 branches); CI fails under 85% | `make cov` |
+| Demo wall time | 1.2 s for all 15 steps | `time make demo` |
 | Image size | 47.7 MB content size (223 MB unpacked on disk) | `make docker-build && docker images trapforge` |
-| Source and test size | 3106 lines in `src/`, 2819 lines in `tests/` | `git ls-files src \| xargs wc -l`, same for `tests` |
+| Source and test size | 4063 lines in `src/`, 3544 lines in `tests/` | `git ls-files src \| xargs wc -l`, same for `tests` |
+
+The timing snippet (Apple-silicon laptop, one process, `uv run python -`):
+
+```python
+import time
+from trapforge.families import REGISTRY, Difficulty
+
+family = REGISTRY.get("affine-ledger")
+for difficulty in Difficulty:
+    times = []
+    for seed in range(100):
+        start = time.perf_counter()
+        family.generate(seed, difficulty)
+        times.append(time.perf_counter() - start)
+    times.sort()
+    print(difficulty.value, f"median {times[50] * 1000:.1f} ms, max {times[-1] * 1000:.1f} ms")
+```
 
 The property tests use Hypothesis against brute force on small inputs and against `sympy`
 on large ones (moduli up to 10^30, 30-digit planted solutions, dense 10x10 matrices), and
@@ -361,6 +516,13 @@ its verdict and count must be the truth. CI runs a derandomized profile
 - **Canonical solution sets.** An `AffineLattice` keeps its kernel basis in Hermite normal
   form and its point reduced modulo it, so equal sets compare equal and box enumeration is
   exact, lazy and lexicographic.
+- **One byte spelling per task.** Every emitted file goes through `trapforge.canonical`, all
+  randomness comes from a string-seeded `random.Random`, and tests pin SHA-256 digests of
+  generated instances across processes and platforms.
+- **Traps that are proved, not hoped for.** A family states what its corpus implies as a
+  constraint system; the uniqueness gate decides how much of the corpus to reveal, and the
+  tests re-prove every generated instance and check that the naive baseline matches the
+  visible sample yet misses every hidden deciding record.
 - **SNF on top of HNF.** `smith_normal_form` diagonalizes the Hermite form of `A` rather than
   `A`; on one seeded dense 10x10 matrix this cut the largest entry of `V` from 539 digits to
   31, and a regression test bounds transform size.
@@ -374,15 +536,13 @@ The full decision log lives in [PLAN.md](PLAN.md).
 
 ## Roadmap
 
-Built in the slices listed in [PLAN.md](PLAN.md). Slices 1-3 are done; slice 8 is partly
+Built in the slices listed in [PLAN.md](PLAN.md). Slices 1-4 are done; slice 8 is partly
 done (the CLI image and `make demo`).
 
-- **Slice 4: plugin API and the affine-scrambled ledger family** (the trap shown by
-  `examples/ledger-anchors.json`), with a reference solver and a naive baseline.
 - **Slice 5: multi-clock log merge family** (wrapping counters with unknown periods, CRT with
   non-coprime moduli).
 - **Slice 6: warehouse conservation family** (a hidden transfer matrix behind aggregates).
-- **Slice 7: bundle exporter and `trapforge verify`** (instruction, data, digest-pinned
+- **Slice 7: bundle exporter, `trapforge export` and `trapforge verify`** (instruction, data, digest-pinned
   Dockerfile, standalone reference solution, byte-exact grader; reference passes and baseline
   fails, locally and in Docker).
 - **Slice 8: compose pipeline** that forges and verifies one bundle per family.

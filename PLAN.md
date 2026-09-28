@@ -13,6 +13,7 @@ src/trapforge/
   linalg/             exact integer matrices: HNF, SNF, kernel bases, Diophantine systems
   prover/             model.py, solver.py (verdicts + certificates), certificate.py
                       (standalone checker), gating.py (uniqueness gate)
+  canonical.py        canonical byte-exact writers (CSV, JSON, text) and SHA-256 digests
   families/           plugin API + registry + the three original task families
   bundle/             exporter, digest-pinned Dockerfile template, byte-exact grader template
   verify.py           reference-passes / baseline-fails check, locally and in Docker
@@ -43,7 +44,7 @@ Goal: Implement `trapforge.linalg` over Python ints: an immutable integer matrix
 
 Goal: Build `trapforge.prover`: a constraint model over bounded integer unknowns (linear equalities over Z, linear congruences mod m, box bounds, and a finite case split for discrete unknowns such as periods), an exact solver built on slices 1-2 that reduces congruences to Diophantine form and enumerates the remaining lattice inside the box, and a result type that is either a UniqueProof (the single parameterization plus a JSON certificate that can be re-checked independently) or an Ambiguity carrying a concrete counterexample pair and the exact or capped size of the ambiguity space. Provide a gate helper that rejects or extends a generated sample until the proof holds, and test it on hand-built unique and deliberately ambiguous systems.
 
-### Slice 4: Task-family plugin API and the affine-scrambled ledger family
+### Slice 4: Task-family plugin API and the affine-scrambled ledger family [x] done
 
 Goal: Define the plugin API: a TaskFamily protocol with generate(seed, difficulty) returning a TaskInstance (corpus files, hidden parameters, expected output bytes, visible sample, constraint system), a registry, a Difficulty enum, the canonical byte-exact writers, and determinism tests (same seed gives identical SHA-256 across processes). Ship the first original family on it: a ledger whose record IDs pass through an unknown affine map x -> (a*x + b) mod m with composite m, where the solver must recover (a, b) from anchor records via linear congruences to reconcile balances; include the reference solver, a naive baseline that solves from two anchors as if m were prime (right on the visible sample, wrong on hidden deciding records), and a test that every generated instance passes the uniqueness gate.
 
@@ -159,3 +160,37 @@ Goal: Add `trapforge report`, which runs N seeds per family and difficulty and r
   with exit code 1 for a failed check (`check` on a bad certificate, `prove
   --require-unique` on a non-unique sample); the slice 7 `prove` for generated instances
   should build on this command rather than add another.
+- 2026-09-29 (slice 4): The canonical writers live in `trapforge/canonical.py`, not under
+  `families/`, because the slice 7 bundle exporter writes through them too. CSV cells that
+  would need quoting (comma, quote, newline, surrounding whitespace, non-ASCII) are rejected
+  rather than quoted, so the byte format has exactly one spelling and the strict reader is a
+  plain split. JSON rejects floats anywhere in the value.
+- 2026-09-29 (slice 4): `TaskInstance` validates itself on construction: the planted world
+  must satisfy the instance's constraint system, every path must be a normalized relative
+  POSIX path, and every file must be bytes. `bundle()` lays it out as `data/`, `expected/`,
+  `sample/` and `meta/` (instruction, task.json with the planted world and extras,
+  system.json in the prover's format), and `digest()` is SHA-256 over that bundle with
+  length-prefixed names and contents, so no two different bundles share an encoding.
+- 2026-09-29 (slice 4): Families draw every random number from `family_rng`, a
+  `random.Random` seeded with the string `trapforge:<family>:<difficulty>:<seed>` (Python
+  hashes string seeds with SHA-512, independent of `PYTHONHASHSEED`). Tests compare digests
+  across subprocesses with two hash seeds and pin the seed-0 digest of every difficulty, so a
+  Linux CI run must reproduce the bytes generated on macOS; the Docker demo printed the same
+  digest as the laptop.
+- 2026-09-29 (slice 4): Affine ledger design. The first two anchors differ by `d * k` with
+  `d | m` and `gcd(k, m/d) = 1`, so exactly `d` maps fit them; the planted `a` is a unit
+  drawn from `[m/d, m)`, so the smallest solution of the two-anchor congruence (what the
+  naive baseline keeps) is never the true one. Decoy anchors are drawn from the class of
+  `x1` mod `d`, where all `d` maps agree, and come first in the gate's candidate stream; the
+  gate's prefix semantics keep them. Queries are split into accounts where the naive and true
+  maps agree (the visible sample) and accounts where they disagree (hidden deciding records),
+  and transactions are appended until every deciding record has a different balance under
+  the two maps, so the baseline is wrong on each of them, not only on its account number.
+- 2026-09-29 (slice 4): "a is coprime to m" is not a linear constraint, so the prover's box
+  is `1 <= a <= m - 1` and uniqueness is proved over a superset of the admissible maps. The
+  reference solver solves the difference congruences with `solve_linear_system` and keeps
+  only units; with a unique proof over the superset, exactly one survives.
+- 2026-09-29 (slice 4): The CLI gained `families` and `generate` now (generate proves the
+  instance, runs the reference and the baseline, prints the digest, and exits 1 when any of
+  the three checks fails; `--out` writes the bundle). Slice 7 adds `export` and `verify` on
+  top of these instead of new generate commands.
