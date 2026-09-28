@@ -38,7 +38,7 @@ Goal: Implement `trapforge.modular` in pure Python: extended gcd, modular invers
 
 Goal: Implement `trapforge.linalg` over Python ints: an immutable integer matrix helper layer (multiply, transpose, identity, fraction-free determinant, rank), Hermite normal form with its unimodular transform, Smith normal form with both unimodular transforms, integer kernel bases, and a linear Diophantine system solver returning a particular solution plus a kernel lattice basis (or a proof of infeasibility), with bounded enumeration of lattice points in a box. Property-test with hypothesis: U*A = H, U*A*V = S, divisibility chain of the SNF diagonal, |det U| = 1, and agreement with sympy's hermite_normal_form / smith_normal_form.
 
-### Slice 3: Uniqueness prover and gate
+### Slice 3: Uniqueness prover and gate [~] in progress (constraint model done; solver, certificates and gate open)
 
 Goal: Build `trapforge.prover`: a constraint model over bounded integer unknowns (linear equalities over Z, linear congruences mod m, box bounds, and a finite case split for discrete unknowns such as periods), an exact solver built on slices 1-2 that reduces congruences to Diophantine form and enumerates the remaining lattice inside the box, and a result type that is either a UniqueProof (the single parameterization plus a JSON certificate that can be re-checked independently) or an Ambiguity carrying a concrete counterexample pair and the exact or capped size of the ambiguity space. Provide a gate helper that rejects or extends a generated sample until the proof holds, and test it on hand-built unique and deliberately ambiguous systems.
 
@@ -58,7 +58,7 @@ Goal: Add the third original family: a hidden non-negative integer transfer matr
 
 Goal: Export any TaskInstance as a self-contained task directory: instruction.md, data/, a Dockerfile pinned to a python:3.12-slim image digest, solution/ with a standalone reference solver that vendors the pure-Python math modules (no installs needed), baseline/, and tests/test_outputs.py that grades byte-exactly against an embedded SHA-256. Add `trapforge verify` that copies a bundle to a temp dir, proves the reference passes and the baseline fails the grader locally, and repeats the check inside Docker (network disabled) when a daemon is available. Wire the Typer CLI: families, generate, prove, export, verify, with CliRunner tests and golden-file tests for the bundle layout.
 
-### Slice 8: Docker, compose and end-to-end make demo
+### Slice 8: Docker, compose and end-to-end make demo [~] partly done (CLI image, make demo, CI image job; compose and bundle verification open)
 
 Goal: Add a slim multi-stage Dockerfile for TrapForge itself (uv-built, non-root, labelled project=trapforge) and a docker-compose.yml with a forge service that generates and exports one bundle per family into a shared volume and a verify service that verifies them. Make `make demo` run the full pipeline end to end (generate, prove, export, verify locally, and verify in Docker when available) with a readable summary, add a CI job that builds the image and runs the demo, and add a docker-clean target that prunes only this project's images.
 
@@ -114,3 +114,11 @@ Goal: Add `trapforge report`, which runs N seeds per family and difficulty and r
 - 2026-09-29 (slice 2): Shared Hypothesis matrix strategies live in `tests/_strategies.py`
   (dense, sparse, low-rank products, repeated rows, random unimodular matrices), because
   uniformly random integer matrices are almost always full rank.
+- 2026-09-29 (deliverable pass): Before slice 3 was finished, the CLI gained `crt`, `solve` and
+  `system` over the completed layers, with bundled `examples/` inputs, and a CLI Dockerfile
+  (python:3.12-slim and the uv image both pinned by digest, non-root, labelled
+  project=trapforge) plus `make demo` / `make docker-demo`, so the repo is usable end to end
+  today. The slice 7 commands (families, generate, prove, export, verify) are still planned.
+- 2026-09-29 (deliverable pass): An unfinished standalone certificate checker left by an
+  interrupted session was parked in a local git stash instead of being committed, because no
+  code produces certificates yet; the solver work in slice 3 should start from it.
