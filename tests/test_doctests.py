@@ -5,11 +5,25 @@ from types import ModuleType
 
 import pytest
 
-from trapforge import modular
+from trapforge import canonical, modular
+from trapforge.families import base, registry
 from trapforge.linalg import diophantine, hermite, lattice, matrix, smith
 from trapforge.prover import gating, model, solver
 
-MODULES = [modular, matrix, hermite, smith, lattice, diophantine, model, solver, gating]
+MODULES = [
+    canonical,
+    modular,
+    matrix,
+    hermite,
+    smith,
+    lattice,
+    diophantine,
+    model,
+    solver,
+    gating,
+    base,
+    registry,
+]
 
 
 @pytest.mark.parametrize("module", MODULES, ids=lambda m: m.__name__)
