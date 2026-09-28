@@ -64,7 +64,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["PLR0915", "N802", "N806"]
+"tests/**" = ["PLR0915", "N802", "N803", "N806"]
 # Matrix names such as A, H, U follow standard linear-algebra notation.
 "src/trapforge/linalg/**" = ["N803", "N806"]
 
