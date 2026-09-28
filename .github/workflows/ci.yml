@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: lint, typecheck, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12 and dependencies
+        run: uv sync --locked --python 3.12
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Mypy (strict on src/)
+        run: uv run mypy
+
+      - name: Pytest with coverage
+        run: uv run pytest -q --cov --cov-report=term-missing --cov-report=xml
+
+      - name: ASCII-only docs and code
+        run: |
+          if LC_ALL=C grep -rnP '[^\x00-\x7F]' --include='*.py' --include='*.md' --include='*.toml' --include='*.yml' .  --exclude-dir=.venv; then
+            echo "Non-ASCII characters found"; exit 1
+          fi
