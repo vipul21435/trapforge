@@ -86,3 +86,13 @@ def test_verify_rejects_a_directory_that_is_not_a_bundle(tmp_path: Path) -> None
     code, output = run("verify", str(tmp_path))
     assert code == 2
     assert "is not a task bundle" in output
+
+
+def test_verify_exits_2_on_a_bundle_it_cannot_read(tmp_path: Path) -> None:
+    out = tmp_path / "bundle"
+    code, _ = run("export", "affine-ledger", "--seed", "7", "--out", str(out))
+    assert code == 0
+    (out / "data" / "notes.txt").symlink_to("does-not-exist")
+    code, output = run("verify", str(out), "--no-docker")
+    assert code == 2
+    assert "cannot read the bundle" in output

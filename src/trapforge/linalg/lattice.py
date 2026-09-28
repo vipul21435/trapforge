@@ -156,10 +156,12 @@ class AffineLattice:
         ``pivot[i]`` depends only on the first ``i + 1`` parameters, so the parameters are
         chosen one at a time; before the walk starts, Fourier-Motzkin elimination projects
         every box bound onto the leading parameters, so each parameter ranges only over
-        values that the *later* coordinates can still accept. The cost therefore follows the
-        number of solutions rather than the width of the box: ``x + y = 10`` over a box of
-        width ``10**9`` takes eleven steps, not a billion. The set is always finite, because
-        every parameter moves its own pivot coordinate.
+        values that the *later* coordinates can still accept over the reals. When that real
+        shadow is tight, the cost follows the number of solutions rather than the width of
+        the box: ``x + y = 10`` over a box of width ``10**9`` takes eleven steps, not a
+        billion. The projection ignores integrality, so on an integer-hollow lattice (a wide
+        real shadow where few integer values extend) the walk is still linear in the width.
+        The set is always finite, because every parameter moves its own pivot coordinate.
         """
         n = self.ambient_dimension
         if len(lower) != n or len(upper) != n:

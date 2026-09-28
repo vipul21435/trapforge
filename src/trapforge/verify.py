@@ -1,14 +1,17 @@
 """Prove that an exported bundle grades the way it should: the reference passes, the baseline fails.
 
-:func:`verify_bundle` never trusts the bundle's own claims. It copies the bundle to a fresh
-temporary directory per run and then:
+:func:`verify_bundle` copies the bundle to a fresh temporary directory per run and then:
 
 1. re-checks ``proof/uniqueness.cert.json`` with the standalone checker and requires the
-   verdict ``unique``;
-2. runs ``solution/solve.py`` and then the grader locally, with ``python -I -S`` (isolated
-   mode, no site-packages), so the run proves that the vendored code needs nothing
-   installed; the grader must pass;
-3. does the same with ``baseline/solve.py``; the grader must fail;
+   verdict ``unique`` (it does not yet tie that certificate to ``data/`` or ``task.json``);
+2. runs ``solution/solve.py`` and then the bundle's own grader locally, with
+   ``python -I -S`` (isolated mode, no site-packages), so the run proves that the vendored
+   code needs nothing installed; the solver must exit 0 and the grader must pass;
+3. does the same with ``baseline/solve.py``; the grader must fail. The grader always runs
+   on whatever the baseline wrote, even when it exits nonzero, because a solver can write
+   the right bytes and then crash. A baseline that is missing or cannot start (an import
+   or syntax error) is a failed check, not a trapped baseline. A solver that runs past
+   the time limit is stopped and graded the same way;
 4. when Docker is available (or required), builds the bundle's ``Dockerfile`` and repeats
    both runs in containers started with ``--network none``, mounting only ``solution/`` or
    ``baseline/``, ``tests/`` and an empty ``output/``; the corpus comes from the image. The
@@ -22,6 +25,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,33 +83,75 @@ def _last_line(result: subprocess.CompletedProcess[str]) -> str:
     return lines[-1] if lines else f"exit {result.returncode}"
 
 
-def _run(command: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command, cwd=cwd, capture_output=True, text=True, timeout=_TIMEOUT, check=False
-    )
+#: Exceptions whose traceback means the solver never got to run its own logic.
+_CANNOT_START = ("ImportError", "ModuleNotFoundError", "SyntaxError", "IndentationError")
 
 
-def _solver_failed(name: str, solver: subprocess.CompletedProcess[str], must_pass: bool) -> Check:
-    # A solver that crashes writes no output, so the grader could only fail.
-    return Check(name, not must_pass, f"solver exited {solver.returncode}: {_last_line(solver)}")
+def _run(
+    command: list[str],
+    cwd: Path | None = None,
+    on_timeout: Callable[[], object] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``command``; past :data:`_TIMEOUT` seconds report a killed process, never raise."""
+    try:
+        return subprocess.run(
+            command, cwd=cwd, capture_output=True, text=True, timeout=_TIMEOUT, check=False
+        )
+    except subprocess.TimeoutExpired:
+        if on_timeout is not None:
+            on_timeout()
+        return subprocess.CompletedProcess(command, -9, "", f"timed out after {_TIMEOUT} s")
+
+
+def _cannot_start(solver: subprocess.CompletedProcess[str]) -> bool:
+    return solver.returncode != 0 and _last_line(solver).split(":", 1)[0] in _CANNOT_START
+
+
+def _judge(
+    name: str,
+    must_pass: bool,
+    solver: subprocess.CompletedProcess[str],
+    grade: Callable[[], subprocess.CompletedProcess[str]],
+) -> Check:
+    """Grade whatever the solver wrote; the reference must also exit 0."""
+    exited = f"solver exited {solver.returncode}: {_last_line(solver)}"
+    if solver.returncode != 0 and (must_pass or _cannot_start(solver)):
+        return Check(name, False, exited)
+    graded = grade()
+    detail = _last_line(graded)
+    if solver.returncode != 0:
+        detail = f"{exited}; grader: {detail}"
+    return Check(name, (graded.returncode == 0) == must_pass, detail)
+
+
+def _missing(name: str, bundle: Path, folder: str) -> Check | None:
+    if (bundle / folder / "solve.py").is_file():
+        return None
+    return Check(name, False, f"{folder}/solve.py is missing")
 
 
 def _local(bundle: Path, work: Path, folder: str, must_pass: bool) -> Check:
+    name = f"local {folder} {'passes' if must_pass else 'fails'} the grader"
+    missing = _missing(name, bundle, folder)
+    if missing is not None:
+        return missing
     task = work / f"local-{folder}"
     shutil.copytree(bundle, task)
     shutil.rmtree(task / "output", ignore_errors=True)
     solver = _run([sys.executable, "-I", "-S", f"{folder}/solve.py", "."], cwd=task)
-    name = f"local {folder} {'passes' if must_pass else 'fails'} the grader"
-    if solver.returncode != 0:
-        return Check(
-            name, not must_pass, f"solver exited {solver.returncode}: {_last_line(solver)}"
-        )
-    grade = _run([sys.executable, "-I", "-S", "tests/test_outputs.py"], cwd=task)
-    graded_pass = grade.returncode == 0
-    return Check(name, graded_pass == must_pass, _last_line(grade))
+    return _judge(
+        name,
+        must_pass,
+        solver,
+        lambda: _run([sys.executable, "-I", "-S", "tests/test_outputs.py"], cwd=task),
+    )
 
 
 def _docker(bundle: Path, work: Path, tag: str, folder: str, must_pass: bool) -> Check:
+    name = f"docker {folder} {'passes' if must_pass else 'fails'} the grader"
+    missing = _missing(name, bundle, folder)
+    if missing is not None:
+        return missing
     task = work / f"docker-{folder}"
     shutil.copytree(bundle, task)
     output = task / "output"
@@ -119,15 +166,20 @@ def _docker(bundle: Path, work: Path, tag: str, folder: str, must_pass: bool) ->
         "-v",
         f"{output}:/task/output",
     ]
-    base = ["docker", "run", "--rm", "--network", "none", *user, *mounts, tag]
-    name = f"docker {folder} {'passes' if must_pass else 'fails'} the grader"
-    solver = _run([*base, "python", "-I", "-S", f"{folder}/solve.py", "/task"])
-    if solver.returncode != 0:
-        return Check(
-            name, not must_pass, f"solver exited {solver.returncode}: {_last_line(solver)}"
+
+    def in_container(*command: str) -> subprocess.CompletedProcess[str]:
+        # A timeout kills only the docker client, so the named container is removed too.
+        container = f"trapforge-verify-{uuid.uuid4().hex[:12]}"
+        base = ["docker", "run", "--rm", "--name", container, "--network", "none"]
+        return _run(
+            [*base, *user, *mounts, tag, *command],
+            on_timeout=lambda: _run(["docker", "rm", "--force", container]),
         )
-    grade = _run([*base, "python", "-I", "-S", "tests/test_outputs.py"])
-    return Check(name, (grade.returncode == 0) == must_pass, _last_line(grade))
+
+    solver = in_container("python", "-I", "-S", f"{folder}/solve.py", "/task")
+    return _judge(
+        name, must_pass, solver, lambda: in_container("python", "-I", "-S", "tests/test_outputs.py")
+    )
 
 
 def verify_bundle(bundle: Path, *, docker: bool | None = None) -> VerifyReport:

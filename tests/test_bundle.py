@@ -192,6 +192,73 @@ def test_verify_reports_broken_solvers_and_certificates(tmp_path: Path) -> None:
     assert report.checks[1].detail.startswith("solver exited 3")
 
 
+@pytest.mark.slow
+def test_verify_grades_a_baseline_that_writes_the_answer_and_then_exits_nonzero(
+    tmp_path: Path,
+) -> None:
+    # Regression: a nonzero baseline exit used to count as trapped without running the grader.
+    bundle = export(tmp_path)
+    reference = (bundle / "solution" / "solve.py").read_text()
+    tail = "    sys.exit(main(sys.argv))"
+    assert tail in reference
+    cheat = reference.replace(tail, "    main(sys.argv)\n    sys.exit(1)")
+    (bundle / "baseline" / "solve.py").write_text(cheat)
+    report = verify_bundle(bundle, docker=False)
+    baseline = report.checks[2]
+    assert baseline.name == "local baseline fails the grader"
+    assert not baseline.passed
+    assert baseline.detail.startswith("solver exited 1")
+    assert not report.passed
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("damage", ["missing", "import-error", "syntax-error"])
+def test_verify_fails_a_baseline_that_cannot_start(tmp_path: Path, damage: str) -> None:
+    bundle = export(tmp_path)
+    solver = bundle / "baseline" / "solve.py"
+    if damage == "missing":
+        solver.unlink()
+    elif damage == "import-error":
+        solver.write_text("import trapforge_no_such_module\n")
+    else:
+        solver.write_text("def broken(:\n")
+    report = verify_bundle(bundle, docker=False)
+    assert [check.passed for check in report.checks] == [True, True, False]
+    if damage == "missing":
+        assert report.checks[2].detail == "baseline/solve.py is missing"
+
+
+@pytest.mark.slow
+def test_verify_still_traps_a_baseline_that_crashes_after_a_wrong_answer(tmp_path: Path) -> None:
+    bundle = export(tmp_path)
+    (bundle / "baseline" / "solve.py").write_text("raise SystemExit(4)\n")
+    report = verify_bundle(bundle, docker=False)
+    assert report.passed
+    assert report.checks[2].detail.startswith("solver exited 4: exit 4; grader: ")
+
+
+def test_a_solver_past_the_time_limit_is_a_graded_run_not_an_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(verify_module, "_TIMEOUT", 1)
+    bundle = export(tmp_path)
+    (bundle / "solution" / "solve.py").write_text("import time\ntime.sleep(30)\n")
+    (bundle / "baseline" / "solve.py").write_text("import time\ntime.sleep(30)\n")
+    report = verify_bundle(bundle, docker=False)
+    assert [check.passed for check in report.checks] == [True, False, True]
+    assert report.checks[1].detail == "solver exited -9: timed out after 1 s"
+
+
+def test_run_calls_the_cleanup_hook_on_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify_module, "_TIMEOUT", 1)
+    cleaned: list[bool] = []
+    result = verify_module._run(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        on_timeout=lambda: cleaned.append(True),
+    )
+    assert (result.returncode, cleaned) == (-9, [True])
+
+
 def test_required_docker_without_a_daemon_is_a_failed_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

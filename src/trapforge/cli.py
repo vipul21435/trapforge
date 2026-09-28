@@ -397,11 +397,14 @@ def verify(
 ) -> None:
     """Prove that the reference passes and the baseline fails, locally and in Docker.
 
-    Exits 1 when any check fails and 2 when the bundle directory does not exist.
+    Exits 1 when any check fails and 2 when the bundle cannot be read.
     """
     if not (bundle / "tests" / "test_outputs.py").is_file():
         _fail(f"{bundle} is not a task bundle (no tests/test_outputs.py)")
-    report = verify_bundle(bundle, docker=docker)
+    try:
+        report = verify_bundle(bundle, docker=docker)
+    except OSError as error:  # shutil.Error too: an unreadable file or a dangling link
+        _fail(f"cannot read the bundle {bundle}: {error}")
     for check in report.checks:
         typer.echo(f"{'ok  ' if check.passed else 'FAIL'} {check.name}: {check.detail}")
     typer.echo("verified" if report.passed else "verification failed")
