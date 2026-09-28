@@ -6,7 +6,7 @@ from types import ModuleType
 import pytest
 
 from trapforge import canonical, modular
-from trapforge.families import base, registry
+from trapforge.families import base, ledger, registry
 from trapforge.linalg import diophantine, hermite, lattice, matrix, smith
 from trapforge.prover import gating, model, solver
 
@@ -23,6 +23,7 @@ MODULES = [
     gating,
     base,
     registry,
+    ledger,
 ]
 
 

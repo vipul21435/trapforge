@@ -11,13 +11,17 @@ from trapforge.families.base import (
     TaskInstance,
     family_rng,
 )
+from trapforge.families.ledger import AffineLedger
 from trapforge.families.registry import Registry
 
 REGISTRY = Registry()
 """Every built-in family, registered at import time."""
 
+REGISTRY.register(AffineLedger())
+
 __all__ = [
     "REGISTRY",
+    "AffineLedger",
     "Difficulty",
     "FamilyError",
     "Registry",
