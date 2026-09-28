@@ -49,8 +49,14 @@ class InvalidModulusError(ModularError):
     """Raised when a modulus is not a positive integer."""
 
     def __init__(self, modulus: int) -> None:
-        super().__init__(f"modulus must be a positive integer, got {modulus}")
+        # The raw operand goes into ``args`` so the error rebuilds itself when pickled or
+        # copied (``BaseException.__reduce__`` calls ``cls(*args)``); the message is
+        # formatted on demand in ``__str__``.
+        super().__init__(modulus)
         self.modulus = modulus
+
+    def __str__(self) -> str:
+        return f"modulus must be a positive integer, got {self.modulus}"
 
 
 class NotInvertibleError(ModularError):
@@ -62,10 +68,14 @@ class NotInvertibleError(ModularError):
     """
 
     def __init__(self, a: int, modulus: int, gcd: int) -> None:
-        super().__init__(f"{a} has no inverse modulo {modulus}: gcd({a}, {modulus}) = {gcd} != 1")
+        super().__init__(a, modulus, gcd)
         self.a = a
         self.modulus = modulus
         self.gcd = gcd
+
+    def __str__(self) -> str:
+        a, m, g = self.a, self.modulus, self.gcd
+        return f"{a} has no inverse modulo {m}: gcd({a}, {m}) = {g} != 1"
 
 
 class Bezout(NamedTuple):
