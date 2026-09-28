@@ -202,6 +202,13 @@ def test_solvers_on_a_hand_built_corpus() -> None:
         ({"anchors.csv": b"account,scrambled\n"}, "params.json must hold"),
         (corpus([(1, 0)], **{"params.json": b"[]"}), "params.json must hold"),
         (corpus([(1, 0)], **{"anchors.csv": b"account,scrambled\n1,x\n"}), "not an integer"),
+        (corpus([(1, 0)], **{"anchors.csv": b"account,scrambled\n--1,0\n"}), "not an integer"),
+        (corpus([(1, 0)], **{"anchors.csv": b"account,scrambled\n1,-\n"}), "not an integer"),
+        (corpus([(1, 0)], **{"anchors.csv": b"account,scrambled\n+1,0\n"}), "not an integer"),
+        (
+            corpus([(1, 0)], **{"anchors.csv": b"account,scrambled\n" + b"7" * 5000 + b",0\n"}),
+            "an integer with 5000 characters is too long",
+        ),
         (corpus([(1, 0)], **{"anchors.csv": b"x,y\n1,0\n"}), "expected the header"),
         (corpus([(1, 0)], **{"anchors.csv": b"account,scrambled\n1,0"}), "end with a newline"),
     ],
@@ -211,6 +218,27 @@ def test_reference_solver_explains_a_corpus_it_cannot_solve(
 ) -> None:
     with pytest.raises(LedgerError, match=message):
         recover_map(files)
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({"ledger.csv": b"txn,account,amount\n1,7,--100\n"}, "ledger.csv: '--100' is not"),
+        ({"ledger.csv": b"txn,account,amount\n1," + b"9" * 4400 + b",1\n"}, "too long"),
+        ({"queries.csv": b"account\n---7\n"}, "queries.csv: '---7' is not"),
+        ({"queries.csv": b"account\n-5\n"}, r"query -5 is outside range\(12\)"),
+        ({"queries.csv": b"account\n0\n100\n"}, r"query 100 is outside range\(12\)"),
+    ],
+)
+def test_both_solvers_reject_a_malformed_ledger_or_query(
+    extra: dict[str, bytes], message: str
+) -> None:
+    # Regression: these used to raise a plain ValueError or silently answer for an aliased
+    # account instead of raising LedgerError.
+    files = corpus([(1, 0), (3, 10), (2, 5)], **extra)
+    for solver in (FAMILY.solve, FAMILY.baseline):
+        with pytest.raises(LedgerError, match=message):
+            solver(files)
 
 
 def test_solvers_need_every_file() -> None:

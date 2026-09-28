@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -118,10 +119,16 @@ def _map_system(modulus: int, anchors: Sequence[tuple[int, int]]) -> ConstraintS
 # -- reading a corpus ----------------------------------------------------------------------
 
 
+_INTEGER = re.compile(r"-?[0-9]+")
+
+
 def _int(cell: str, where: str) -> int:
-    if not cell.lstrip("-").isdigit():
+    if _INTEGER.fullmatch(cell) is None:
         raise LedgerError(f"{where}: {cell!r} is not an integer")
-    return int(cell)
+    try:
+        return int(cell)
+    except ValueError as error:  # past the interpreter's int-to-str digit limit
+        raise LedgerError(f"{where}: an integer with {len(cell)} characters is too long") from error
 
 
 def _table(files: Mapping[str, bytes], name: str, header: tuple[str, ...]) -> list[list[int]]:
@@ -167,6 +174,9 @@ def _balances(files: Mapping[str, bytes], modulus: int, a: int, b: int) -> bytes
     for _, account, amount in _table(files, "ledger.csv", ("txn", "account", "amount")):
         totals[account] = totals.get(account, 0) + amount
     queries = sorted(x for (x,) in _table(files, "queries.csv", ("account",)))
+    for x in queries:
+        if not 0 <= x < modulus:
+            raise LedgerError(f"query {x} is outside range({modulus})")
     return csv_bytes(HEADER, [[x, totals.get((a * x + b) % modulus, 0)] for x in queries])
 
 
