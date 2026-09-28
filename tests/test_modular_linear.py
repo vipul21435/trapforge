@@ -4,8 +4,9 @@ import math
 from dataclasses import replace
 
 import pytest
-from hypothesis import given
+from hypothesis import assume, event, given
 from hypothesis import strategies as st
+from sympy.ntheory.modular import solve_congruence
 from sympy.ntheory.residue_ntheory import linear_congruence
 
 from trapforge.modular import (
@@ -62,6 +63,72 @@ def test_single_congruence_matches_sympy(a: int, b: int, m: int) -> None:
         assert list(result.residues_mod(m)) == expected
     else:
         assert isinstance(result, UnsolvableCongruence)
+
+
+def sympy_solutions(a: int, b: int, m: int) -> list[int]:
+    """sympy's list of solutions modulo m; callers keep gcd(a, m) small (it lists all)."""
+    return sorted(int(x) for x in linear_congruence(a % m, b % m, m))
+
+
+@given(
+    st.integers(min_value=0, max_value=10**30),
+    st.integers(min_value=0, max_value=10**30),
+    st.integers(min_value=2, max_value=10**30),
+)
+def test_single_congruence_matches_sympy_on_large_moduli(a: int, b: int, m: int) -> None:
+    assume(a % m != 0 and math.gcd(a, m) <= 1000)
+    expected = sympy_solutions(a, b, m)
+    result = solve_linear_congruence(a, b, m)
+    if expected:
+        assert isinstance(result, Congruence)
+        assert list(result.residues_mod(m)) == expected
+    else:
+        assert isinstance(result, UnsolvableCongruence)
+
+
+@given(
+    st.integers(min_value=-(10**30), max_value=10**30),
+    st.integers(min_value=1, max_value=10**12),
+    st.lists(
+        st.tuples(
+            st.integers(min_value=1, max_value=10**30),
+            st.integers(min_value=1, max_value=10**9),
+            st.sampled_from([0, 0, 0, 1]),
+        ),
+        min_size=1,
+        max_size=5,
+    ),
+)
+def test_system_matches_sympy_on_large_moduli(
+    x: int, shared: int, rows: list[tuple[int, int, int]]
+) -> None:
+    # sympy has no solver for simultaneous a_i*x = b_i (mod m_i), so the oracle is built
+    # from two sympy functions: linear_congruence turns each constraint into its class of
+    # solutions modulo m_i / gcd(a_i, m_i), and solve_congruence intersects the classes.
+    system = [LinearCongruence(a, a * x + nudge, shared * cofactor) for a, cofactor, nudge in rows]
+    assume(
+        all(
+            a % c.modulus and math.gcd(a, c.modulus) <= 1000
+            for (a, _, _), c in zip(rows, system, strict=True)
+        )
+    )
+    result = solve_linear_system(system)
+    classes = []
+    for index, c in enumerate(system):
+        solutions = sympy_solutions(c.a, c.b, c.modulus)
+        if not solutions:
+            event("a constraint is unsolvable on its own")
+            assert result == UnsolvableCongruence(index, math.gcd(c.a, c.modulus))
+            return
+        classes.append((solutions[0], c.modulus // math.gcd(c.a, c.modulus)))
+    expected = solve_congruence(*classes)
+    event("consistent" if expected else "two constraints conflict")
+    if expected is None:
+        assert isinstance(result, ConflictingCongruences)
+        assert result.verify(system)
+    else:
+        assert isinstance(result, Congruence)
+        assert (result.residue, result.modulus) == tuple(map(int, expected))
 
 
 @given(big, big, big_moduli)

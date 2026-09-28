@@ -4,8 +4,9 @@ import math
 from dataclasses import replace
 
 import pytest
-from hypothesis import given
+from hypothesis import event, given
 from hypothesis import strategies as st
+from sympy import nextprime
 from sympy.ntheory.modular import crt as sympy_crt
 from sympy.ntheory.modular import solve_congruence
 
@@ -162,6 +163,53 @@ def test_crt_matches_sympy_crt_on_coprime_moduli(case: tuple[list[int], list[int
     expected = sympy_crt(moduli, values)
     assert expected is not None
     assert (result.residue, result.modulus) == tuple(map(int, expected))
+
+
+# Distinct primes of 21 to 31 digits, so the product modulus runs to about 150 digits.
+large_primes = st.lists(
+    st.integers(min_value=10**20, max_value=10**30), min_size=1, max_size=5, unique=True
+).map(lambda starts: sorted({int(nextprime(start)) for start in starts}))
+big_residues = st.integers(min_value=-(10**40), max_value=10**40)
+
+
+@given(
+    large_primes.flatmap(
+        lambda moduli: st.tuples(st.just(moduli), st.lists(big_residues, **_same_length(moduli)))
+    )
+)
+def test_crt_matches_sympy_crt_on_large_coprime_moduli(case: tuple[list[int], list[int]]) -> None:
+    moduli, values = case
+    result = crt(Congruence.of(v, m) for v, m in zip(values, moduli, strict=True))
+    assert isinstance(result, Congruence)
+    expected = sympy_crt(moduli, values)
+    assert expected is not None
+    assert (result.residue, result.modulus) == tuple(map(int, expected))
+
+
+@given(
+    st.integers(min_value=-(10**30), max_value=10**30),
+    st.integers(min_value=1, max_value=10**15),
+    st.lists(
+        st.tuples(st.integers(min_value=1, max_value=10**9), st.sampled_from([0, 0, 0, 1, -7])),
+        min_size=1,
+        max_size=6,
+    ),
+)
+def test_crt_matches_sympy_on_large_non_coprime_moduli(
+    x: int, shared: int, rows: list[tuple[int, int]]
+) -> None:
+    # Every modulus is a multiple of one shared factor of up to 15 digits. Residues are a
+    # planted x, sometimes nudged, so both consistent and conflicting systems occur.
+    system = [Congruence.of(x + nudge, shared * cofactor) for cofactor, nudge in rows]
+    result = crt(system)
+    expected = solve_congruence(*((c.residue, c.modulus) for c in system))
+    event("consistent" if expected else "conflicting")
+    if expected is None:
+        assert isinstance(result, ConflictingCongruences)
+        assert result.verify(system)
+    else:
+        assert isinstance(result, Congruence)
+        assert (result.residue, result.modulus) == tuple(map(int, expected))
 
 
 @given(

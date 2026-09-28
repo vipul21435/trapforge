@@ -94,10 +94,20 @@ True
 ```
 
 Every function is property-tested with [Hypothesis](https://hypothesis.readthedocs.io/)
-against brute force on small moduli and against `sympy` (`igcdex`, `mod_inverse`,
-`solve_congruence`, `crt` on coprime moduli, `linear_congruence`) on large ones, including
-30-digit planted solutions and tampered proofs that `verify` must reject. CI runs a
-derandomized profile (`HYPOTHESIS_PROFILE=ci`) so any failure reproduces.
+against brute force on small moduli (up to 60) and against `sympy` on large ones:
+
+| Function | sympy oracle | Input sizes the oracle sees |
+| --- | --- | --- |
+| `extended_gcd` | `igcdex` (the gcd) | operands up to 10^40; the Bezout identity is checked directly |
+| `mod_inverse` | `mod_inverse`, and Python's `pow(a, -1, m)` | moduli up to 10^30 |
+| `crt`, coprime moduli | `crt` | primes up to 79, and 1 to 5 distinct primes of 21 to 31 digits |
+| `crt`, shared factors | `solve_congruence` | smooth moduli up to 16807, and moduli sharing a factor up to 10^15 |
+| `solve_linear_congruence` | `linear_congruence` | moduli up to 2000, and up to 10^30 when gcd(a, m) <= 1000 |
+| `solve_linear_system` | `linear_congruence` per constraint, then `solve_congruence` | up to 5 constraints with moduli up to about 10^21 sharing a factor |
+
+On top of the oracles, planted 30-digit solutions must always be recovered and tampered
+proofs must be rejected by `verify`. CI runs a derandomized profile
+(`HYPOTHESIS_PROFILE=ci`) so any failure reproduces.
 
 ## What works today: the exact integer linear algebra core
 
