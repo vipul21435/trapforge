@@ -48,3 +48,13 @@ jobs:
           if LC_ALL=C grep -rnP '[^\x00-\x7F]' --include='*.py' --include='*.md' --include='*.toml' --include='*.yml' .  --exclude-dir=.venv; then
             echo "Non-ASCII characters found"; exit 1
           fi
+
+  docker:
+    name: docker image and demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image and run the demo inside it
+        run: make docker-demo
