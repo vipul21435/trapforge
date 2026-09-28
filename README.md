@@ -20,8 +20,11 @@ sample until the proof holds), a task-family plugin API with canonical byte-exac
 the first task family (an affine-scrambled ledger with a reference solver and a naive
 baseline that it traps), and a CLI over all of it. Everything is pure Python 3.12 integers
 (no floats, no numpy), implemented from scratch and property-tested against brute force and
-`sympy` (a dev-only oracle). The other two task families and the bundle exporter are on the
-[Roadmap](#roadmap).
+`sympy` (a dev-only oracle). Any generated instance exports as a self-contained task bundle
+(digest-pinned Dockerfile, standalone reference solver and baseline, byte-exact SHA-256
+grader, uniqueness certificate), and `trapforge verify` proves the reference passes and the
+baseline fails, locally and in Docker with the network disabled. The other two task
+families are on the [Roadmap](#roadmap).
 
 ## Why this exists
 
@@ -43,9 +46,11 @@ designs, examples and data here are original.
 | Canonical writers | `trapforge.canonical` | byte-exact CSV, JSON and text writers (`\n` endings, sorted keys, ASCII, no floats, no CSV quoting: cells that would need it are rejected), a strict CSV reader, and a SHA-256 digest over a whole file set |
 | Task-family plugin API | `trapforge.families` | `TaskFamily` protocol (`generate`, `solve`, `baseline`), `TaskInstance` (corpus, hidden world, expected bytes, visible sample, constraint system), `Difficulty`, a validating `Registry`, and a string-seeded RNG so a (family, difficulty, seed) triple gives the same bytes in every process |
 | Affine ledger family | `trapforge.families.ledger` | account numbers scrambled by `x -> (a*x + b) mod m` with composite `m`; every instance is gated to a unique map; a reference solver built on linear congruences; a naive baseline that treats `m` as prime and is right on the visible sample, wrong on every hidden deciding record |
-| CLI | `trapforge` | `crt`, `solve`, `system`, `prove`, `check`, `families` and `generate` commands over the layers above, plus `info` |
+| Bundle exporter | `trapforge.bundle` | `instruction.md`, `data/`, a `Dockerfile` pinned to a `python:3.12-slim` digest, `solution/` and `baseline/` solvers that vendor TrapForge's pure-Python modules (no installs), `tests/test_outputs.py` grading byte for byte against an embedded SHA-256 (the expected bytes are not shipped), `proof/uniqueness.cert.json` and `task.json`; refuses instances whose answer is not unique; golden files pin the layout |
+| Bundle verifier | `trapforge.verify` | re-checks the certificate, runs both solvers and the grader in fresh copies with `python -I -S` (no site-packages), and repeats the runs in a container with `--network none` when Docker answers, then removes the image |
+| CLI | `trapforge` | `crt`, `solve`, `system`, `prove`, `check`, `families`, `generate`, `export` and `verify` commands over the layers above, plus `info` |
 | Container | `Dockerfile` | multi-stage uv build on `python:3.12-slim` pinned by digest, non-root user, `LABEL project=trapforge` |
-| Demo | `make demo` | `scripts/demo.sh` runs the CLI over the bundled `examples/` inputs and one generated task, locally or in the image |
+| Demo | `make demo` | `scripts/demo.sh` runs the CLI over the bundled `examples/` inputs and one generated task, then exports and verifies it (the image run skips the two bundle steps) |
 
 Every "no solution" answer comes with a certificate that can be re-checked without trusting
 the solver: a conflicting pair of congruences and a witness modulus, or integer weights `w`
@@ -83,12 +88,15 @@ Commands:
   check     Re-check a uniqueness certificate from scratch, without running the solver.
   families  List the registered task families.
   generate  Generate one task instance, prove it unique and run its reference and baseline.
+  export    Export one instance as a self-contained task bundle (see `trapforge verify`).
+  verify    Prove that the reference passes and the baseline fails, locally and in Docker.
 ```
 
 Exit code 0 means the input was valid (with or without a solution); 1 means a check failed
 (`check` on a certificate that does not hold, `prove --require-unique` on a sample that is
 not unique, `generate` on an instance that is not unique, not reproduced by its reference
-solver or not missed by its baseline); 2 means the input could not be read or parsed. The outputs below are copied from `make demo`.
+solver or not missed by its baseline, `verify` on a bundle whose reference fails or whose
+baseline passes); 2 means the input could not be read or parsed. The outputs below are copied from `make demo`.
 
 **`crt`** combines congruences whose moduli share factors, or proves they conflict:
 
@@ -229,6 +237,65 @@ sha256: c91f178cc5830e227c04c9b436b7b79a1c0007286c33ef79aadb55a569471e4d
 ```
 
 The same command inside the Linux image (`make docker-demo`) printed the same SHA-256.
+
+**`export`** and **`verify`** turn that instance into a task bundle and check it. The output
+directory must not exist or be empty; `verify` runs Docker when a daemon answers (`--docker`
+requires it, `--no-docker` skips it) and exits 1 when any check fails:
+
+```text
+$ trapforge export affine-ledger --seed 7 --out bundle
+affine-ledger / easy / seed 7
+  data/: 4 files
+  solution/: 20 files
+  baseline/: 20 files
+  tests/: 1 file
+  proof/: 1 file
+wrote 49 files under bundle
+
+$ find bundle -path '*/vendor' -prune -o -type f -print | sort
+bundle/Dockerfile
+bundle/baseline/solve.py
+bundle/data/anchors.csv
+bundle/data/ledger.csv
+bundle/data/params.json
+bundle/data/queries.csv
+bundle/instruction.md
+bundle/proof/uniqueness.cert.json
+bundle/solution/solve.py
+bundle/task.json
+bundle/tests/test_outputs.py
+
+$ trapforge verify bundle
+ok   certificate proves a unique answer: verified: unique, 1 solution
+ok   local solution passes the grader: PASS test_output_matches_byte_for_byte
+ok   local baseline fails the grader: FAIL test_output_matches_byte_for_byte: expected 72 bytes, got 69
+ok   docker image builds: built trapforge-task:trapforge-verify-s3cw5t3d from the pinned base image
+ok   docker solution passes the grader: PASS test_output_matches_byte_for_byte
+ok   docker baseline fails the grader: FAIL test_output_matches_byte_for_byte: expected 72 bytes, got 69
+verified
+```
+
+The bundle's `Dockerfile` bakes in only the instruction and the corpus:
+
+```text
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+LABEL project=trapforge \
+      trapforge.family="affine-ledger" \
+      trapforge.difficulty="easy" \
+      trapforge.seed="7"
+RUN useradd --create-home --uid 10001 solver \
+    && mkdir -p /task/output \
+    && chown solver /task/output
+WORKDIR /task
+COPY instruction.md ./
+COPY data/ data/
+USER solver
+```
+
+`verify` mounts `solution/` (or `baseline/`) and `tests/` read-only plus an empty `output/`,
+and runs `python -I -S solution/solve.py /task` and then `python -I -S tests/test_outputs.py`
+in containers started with `--network none`. The grader also runs under pytest
+(`pytest tests/test_outputs.py`, 2 tests).
 
 ## Library usage
 
@@ -415,12 +482,12 @@ flowchart LR
         CERT["prover.certificate<br/>standalone checker<br/>(stdlib only)"]
         CAN["canonical<br/>byte-exact writers,<br/>SHA-256 digests"]
         FAM["families<br/>plugin API, registry,<br/>affine ledger"]
-        CLI["cli (Typer)<br/>crt, solve, system, prove,<br/>check, families, generate"]
+        BUNDLE["bundle + verify<br/>digest-pinned task dirs,<br/>SHA-256 graders, Docker check"]
+        CLI["cli (Typer)<br/>crt, solve, system, prove,<br/>check, families, generate,<br/>export, verify"]
         EX[("examples/*.json")]
     end
     subgraph planned["roadmap"]
         MORE["task families<br/>clocks, warehouse"]
-        BUNDLE["bundle exporter<br/>+ verify in Docker"]
     end
     MOD --> CLI
     LIN --> CLI
@@ -435,8 +502,10 @@ flowchart LR
     MOD --> FAM
     CAN --> FAM
     FAM --> CLI
+    FAM --> BUNDLE
+    CERT --> BUNDLE
+    BUNDLE --> CLI
     FAM -.-> MORE
-    FAM -.-> BUNDLE
 ```
 
 ```
@@ -451,6 +520,8 @@ src/trapforge/
   families/base.py      Difficulty, TaskInstance, the TaskFamily protocol, family_rng
   families/registry.py  the family registry
   families/ledger.py    the affine-scrambled ledger family
+  bundle.py             task bundle exporter (Dockerfile, solvers, grader templates)
+  verify.py             reference-passes / baseline-fails check, locally and in Docker
   cli.py                Typer CLI
 examples/               bundled JSON inputs for the CLI and the demo
 scripts/demo.sh         the end-to-end demo, runnable locally or in the image
@@ -462,15 +533,17 @@ Every number here comes from a command in this repo, run on the current tree.
 
 | Number | Value | Command |
 | --- | --- | --- |
-| Tests | 722 passed (49 CLI, 1 demo script, 13 doctest modules, 76 linalg, 89 modular, 116 prover, 28 canonical writers, 350 families: 26 plugin API, 324 affine ledger) | `make cov` and `uv run pytest -q --co` |
+| Tests | 760 passed (59 CLI, 1 demo script, 13 doctest modules, 78 linalg, 89 modular, 122 prover, 28 canonical writers, 350 families: 26 plugin API, 324 affine ledger; 20 bundle and verify) | `make cov` and `uv run pytest -q --co` |
 | Ledger instances checked by the test suite | 73 (seeds 0-39 easy, 0-24 medium, 0-7 hard): each proved unique with a re-checked certificate, reproduced by the reference solver, missed by the baseline on every deciding record | `uv run pytest -q tests/test_family_ledger.py` |
 | Ledger instances through the CLI gate | 300 of 300 exit 0 (seeds 0-99 at each difficulty) | `for d in easy medium hard; do for s in $(seq 0 99); do uv run trapforge generate affine-ledger --seed $s --difficulty $d > /dev/null \|\| echo "FAIL $d $s"; done; done` |
 | Ledger generation time (gate proofs included) | median 0.7 ms easy, 2.2 ms medium, 16.1 ms hard; slowest 30.6 ms (seeds 0-99 each; varies a few ms between runs) | the timing snippet below |
 | Tampered certificates rejected | 40 hand-written tamperings, each with its expected reason | `uv run pytest -q tests/test_prover_certificate.py -k tampered` |
-| Branch coverage of `src/` | 100% (1935 statements, 608 branches); CI fails under 85% | `make cov` |
-| Demo wall time | 1.2 s for all 15 steps | `time make demo` |
+| Branch coverage of `src/` | 99.69% (2196 statements, 678 branches); CI fails under 85% | `make cov` |
+| Demo wall time | 5.2 s for all 17 steps, Docker verification included | `time make demo` |
+| Bundle verification | 6 of 6 checks pass for `affine-ledger` seed 7 (certificate; reference passes and baseline fails, locally and in Docker with `--network none`) | `trapforge export affine-ledger --seed 7 --out bundle && trapforge verify bundle` |
+| Wide-box proof | `x + y = 10` with both unknowns in `0..10**9`: exactly 11 worlds, 0.14 s wall for the whole `prove` command (it took minutes before the projected walk) | `time uv run trapforge prove examples/wide-sum.json` |
 | Image size | 47.7 MB content size (223 MB unpacked on disk) | `make docker-build && docker images trapforge` |
-| Source and test size | 4063 lines in `src/`, 3544 lines in `tests/` | `git ls-files src \| xargs wc -l`, same for `tests` |
+| Source and test size | 4701 lines in `src/`, 4279 lines in `tests/` | `git ls-files src \| xargs wc -l`, same for `tests` |
 
 The timing snippet (Apple-silicon laptop, one process, `uv run python -`):
 
@@ -526,9 +599,14 @@ its verdict and count must be the truth. CI runs a derandomized profile
 - **SNF on top of HNF.** `smith_normal_form` diagonalizes the Hermite form of `A` rather than
   `A`; on one seeded dense 10x10 matrix this cut the largest entry of `V` from 539 digits to
   31, and a regression test bounds transform size.
-- **sympy is a test oracle, not a dependency.** The runtime depends only on Typer, so a
-  future exported reference solver can vendor the math modules into a bare
-  `python:3.12-slim` image.
+- **sympy is a test oracle, not a dependency.** The runtime depends only on Typer, so an
+  exported reference solver vendors the math modules and runs in a bare `python:3.12-slim`
+  image; `verify` runs it with `python -I -S` to prove nothing else is needed.
+- **Graders that do not leak the answer.** A bundle embeds only the SHA-256 and the byte
+  count of the expected output, and it ships only instances with a proved unique answer.
+- **Box walks that cost what the answer costs.** Before enumerating lattice points, every
+  box bound is projected onto the leading parameters (integer Fourier-Motzkin), so a
+  system with 11 solutions in a box of width 10**9 takes 11 steps, not 10**9.
 - **Reproducible builds.** `uv.lock` is enforced with `uv sync --locked` in CI and in the
   Dockerfile, and both base images are pinned by digest.
 
@@ -536,16 +614,14 @@ The full decision log lives in [PLAN.md](PLAN.md).
 
 ## Roadmap
 
-Built in the slices listed in [PLAN.md](PLAN.md). Slices 1-4 are done; slice 8 is partly
-done (the CLI image and `make demo`).
+Built in the slices listed in [PLAN.md](PLAN.md). Slices 1-4 and 7 are done; slice 8 is
+partly done (the CLI image and a `make demo` that exports and verifies a bundle).
 
 - **Slice 5: multi-clock log merge family** (wrapping counters with unknown periods, CRT with
   non-coprime moduli).
 - **Slice 6: warehouse conservation family** (a hidden transfer matrix behind aggregates).
-- **Slice 7: bundle exporter, `trapforge export` and `trapforge verify`** (instruction, data, digest-pinned
-  Dockerfile, standalone reference solution, byte-exact grader; reference passes and baseline
-  fails, locally and in Docker).
-- **Slice 8: compose pipeline** that forges and verifies one bundle per family.
+- **Slice 8: compose pipeline** that forges and verifies one bundle per family, and bundle
+  verification inside `make docker-demo`.
 - **Slice 9: difficulty report and benchmarks** (baseline failure rates, ambiguity-space
   size, generation and proof latency) and authoring docs.
 

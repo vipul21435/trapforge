@@ -41,7 +41,7 @@ docker-build:  ## Build the CLI image (labelled project=trapforge)
 	docker build -t $(IMAGE) .
 
 docker-demo: docker-build  ## Run the same demo inside the image
-	TRAPFORGE="docker run --rm $(IMAGE)" sh scripts/demo.sh
+	TRAPFORGE="docker run --rm $(IMAGE)" TRAPFORGE_DEMO_BUNDLE=0 sh scripts/demo.sh
 
 docker-clean:  ## Remove this project's images and its dangling build layers
 	-docker image rm $(IMAGE)

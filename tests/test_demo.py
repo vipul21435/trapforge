@@ -14,7 +14,11 @@ ROOT = Path(__file__).resolve().parent.parent
 @pytest.mark.slow
 @pytest.mark.skipif(shutil.which("sh") is None, reason="needs a POSIX shell")
 def test_demo_script_runs_every_step() -> None:
-    env = {**os.environ, "TRAPFORGE": f"{sys.executable} -m trapforge.cli"}
+    env = {
+        **os.environ,
+        "TRAPFORGE": f"{sys.executable} -m trapforge.cli",
+        "TRAPFORGE_VERIFY_FLAGS": "--no-docker",
+    }
     result = subprocess.run(
         ["sh", "scripts/demo.sh"],
         cwd=ROOT,
@@ -25,7 +29,8 @@ def test_demo_script_runs_every_step() -> None:
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("\n== ") == 15
+    assert result.stdout.count("\n== ") == 17
+    assert result.stdout.rstrip().splitlines()[-3] == "verified"
     assert "exactly one point in the box (unique)" in result.stdout
     assert result.stdout.count("certificate re-checked: True") == 6
     assert "unique: a=5, b=7" in result.stdout

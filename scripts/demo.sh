@@ -1,7 +1,10 @@
 #!/usr/bin/env sh
 # End-to-end tour of the TrapForge CLI on the bundled examples/ inputs.
 # TRAPFORGE is the command to run; `make demo` uses the local uv environment and
-# `make docker-demo` runs the same steps inside the image.
+# `make docker-demo` runs the same steps inside the image. The bundle steps need the
+# exported directory to survive between commands, so they run only when
+# TRAPFORGE_DEMO_BUNDLE is 1 (the default; `make docker-demo` sets it to 0).
+# TRAPFORGE_VERIFY_FLAGS is passed to `verify` (for example --no-docker).
 set -eu
 
 TRAPFORGE=${TRAPFORGE:-"uv run trapforge"}
@@ -44,5 +47,15 @@ run "re-check the bundled certificate without running the solver" \
 run "the registered task families" families
 run "a generated affine-ledger task: proved unique, solved by the reference, baseline trapped" \
     generate affine-ledger --seed 7
+
+if [ "${TRAPFORGE_DEMO_BUNDLE:-1}" = 1 ]; then
+    scratch=$(mktemp -d)
+    trap 'rm -rf "$scratch"' EXIT
+    run "export that task as a self-contained bundle with a digest-pinned Dockerfile" \
+        export affine-ledger --seed 7 --out "$scratch/bundle"
+    # shellcheck disable=SC2086
+    run "verify it: reference passes, baseline fails (also in Docker when a daemon answers)" \
+        verify "$scratch/bundle" ${TRAPFORGE_VERIFY_FLAGS:-}
+fi
 
 printf '\ndemo finished: every step above ran on the bundled examples/ inputs or a seeded generator\n'

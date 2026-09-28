@@ -1,0 +1,32 @@
+{
+  "choices": [],
+  "unknowns": [
+    {
+      "name": "x",
+      "lower": 0,
+      "upper": 1000000000
+    },
+    {
+      "name": "y",
+      "lower": 0,
+      "upper": 1000000000
+    }
+  ],
+  "constraints": [
+    {
+      "kind": "equation",
+      "label": "total",
+      "terms": [
+        [
+          "x",
+          1
+        ],
+        [
+          "y",
+          1
+        ]
+      ],
+      "rhs": 10
+    }
+  ]
+}

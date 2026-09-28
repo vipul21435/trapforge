@@ -15,7 +15,7 @@ src/trapforge/
                       (standalone checker), gating.py (uniqueness gate)
   canonical.py        canonical byte-exact writers (CSV, JSON, text) and SHA-256 digests
   families/           plugin API + registry + the three original task families
-  bundle/             exporter, digest-pinned Dockerfile template, byte-exact grader template
+  bundle.py           exporter, digest-pinned Dockerfile template, byte-exact grader template
   verify.py           reference-passes / baseline-fails check, locally and in Docker
   report.py           difficulty report (baseline failure rate, ambiguity-space size)
   cli.py              Typer CLI
@@ -56,7 +56,7 @@ Goal: Add the second original family: events are stamped by devices whose counte
 
 Goal: Add the third original family: a hidden non-negative integer transfer matrix between warehouses must be recovered from aggregate observations (opening and closing stock per site, per-lane manifest counts and weighted totals), which form a linear Diophantine system whose kernel is cut to a single point by box bounds and the weighted aggregates. Include the generator, the constraint system and uniqueness gate (regenerating aggregates until unique), a reference solver built on the SNF/kernel machinery plus bounded lattice search, a naive baseline (greedy northwest-corner fill that matches every net flow but not the hidden matrix), and tests for determinism, exactness and baseline failure.
 
-### Slice 7: Bundle exporter, verify command and Typer CLI
+### Slice 7: Bundle exporter, verify command and Typer CLI [x] done
 
 Goal: Export any TaskInstance as a self-contained task directory: instruction.md, data/, a Dockerfile pinned to a python:3.12-slim image digest, solution/ with a standalone reference solver that vendors the pure-Python math modules (no installs needed), baseline/, and tests/test_outputs.py that grades byte-exactly against an embedded SHA-256. Add `trapforge verify` that copies a bundle to a temp dir, proves the reference passes and the baseline fails the grader locally, and repeats the check inside Docker (network disabled) when a daemon is available. Wire the Typer CLI: families, generate, prove, export, verify, with CliRunner tests and golden-file tests for the bundle layout.
 
@@ -206,3 +206,23 @@ Goal: Add `trapforge report`, which runs N seeds per family and difficulty and r
   product lazily, `check_certificate` reports too-deep JSON as malformed, and the CLI maps
   non-UTF-8 and too-deep input files to exit 2 (exit 1 stays reserved for failed checks).
   The Hypothesis systems now draw up to two choices and choice-dependent lower bounds.
+- 2026-09-29 (slice 7): The exporter is one module, `trapforge/bundle.py`, with the templates
+  as f-strings, instead of a `bundle/` package with template files: the templates are short,
+  and golden files in `tests/golden/` pin every generated file byte for byte (rewrite them
+  with `TRAPFORGE_UPDATE_GOLDEN=1` after an intended change).
+- 2026-09-29 (slice 7): The standalone solvers vendor the whole `trapforge` package except
+  `cli.py`, `bundle.py` and `verify.py` (20 files) and load the family class by module and
+  name, so any family whose class takes no constructor arguments exports unchanged. A family
+  outside TrapForge must be a single-file top-level module, which is vendored next to it;
+  anything else raises `BundleError`.
+- 2026-09-29 (slice 7): The grader embeds only the SHA-256 and the byte count of the expected
+  output. It is a pytest file that also runs as `python tests/test_outputs.py`, so the task
+  image needs no pytest and `verify` can run it with the network disabled. `verify` runs
+  every solver and grader with `python -I -S`, which drops site-packages, so a passing run
+  proves the vendored copy is complete.
+- 2026-09-29 (slice 7): The Dockerfile bakes in only `instruction.md` and `data/`; `verify`
+  mounts `solution/` or `baseline/` and `tests/` read-only and an empty `output/`, so the
+  container run also proves that the image carries the corpus the solver reads. `make
+  docker-demo` skips the two bundle steps because each command runs in its own container;
+  running them there is part of slice 8. `prove` stays the system-file command from slice 3:
+  `generate --out` writes `meta/system.json`, which it accepts.
