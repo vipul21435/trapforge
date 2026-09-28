@@ -2,15 +2,17 @@
 
 The commands are thin wrappers over the library: ``crt`` over :mod:`trapforge.modular`,
 ``solve`` over :mod:`trapforge.linalg`, ``system`` over :mod:`trapforge.prover.model`, and
-``prove`` and ``check`` over the prover's solver and its standalone certificate checker, and
-``families`` and ``generate`` over the task-family registry.
+``prove`` and ``check`` over the prover's solver and its standalone certificate checker,
+``families`` and ``generate`` over the task-family registry, and ``export`` and ``verify``
+over :mod:`trapforge.bundle` and :mod:`trapforge.verify`.
 Every "no solution" answer and every proof is printed together with the result of
 re-checking its certificate, so the CLI never asks to be trusted.
 
 Exit codes: 0 when the input was valid (whether or not it has a solution), 1 when a check
 fails (``check`` on a certificate that does not hold, ``prove --require-unique`` on a sample
 that is not unique, ``generate`` on an instance that is not unique, not solved by its
-reference solver or not missed by its baseline), 2 for input that cannot be read or parsed.
+reference solver or not missed by its baseline, ``verify`` on a bundle whose reference fails
+or whose baseline passes), 2 for input that cannot be read or parsed.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from typing import Annotated, Any, NoReturn
 import typer
 
 from trapforge import __version__
+from trapforge.bundle import BundleError, bundle_files, write_bundle
 from trapforge.families import REGISTRY, Difficulty, FamilyError
 from trapforge.linalg import AffineLattice, LinalgError, Matrix, solve_diophantine
 from trapforge.modular import Congruence, ModularError, crt
@@ -35,6 +38,7 @@ from trapforge.prover import (
     check_certificate,
     prove,
 )
+from trapforge.verify import verify_bundle
 
 app = typer.Typer(
     name="trapforge",
@@ -348,6 +352,60 @@ def generate(
             _fail(f"cannot write under {out}: {error.strerror or error}")
         typer.echo(f"wrote {_plural(len(bundle), 'file')} under {out}")
     if not (unique and solved and wrong and keeps_sample):
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def export(
+    family: Annotated[str, typer.Argument(help="A family name from `trapforge families`.")],
+    out: Annotated[Path, typer.Option(help="Directory to create; must not exist or be empty.")],
+    seed: Annotated[int, typer.Option(min=0, help="Non-negative seed.")] = 0,
+    difficulty: Annotated[str, typer.Option(help="easy, medium or hard.")] = "easy",
+) -> None:
+    """Export one instance as a self-contained task bundle (see `trapforge verify`).
+
+    The bundle holds instruction.md, data/, a digest-pinned Dockerfile, a standalone
+    reference solver and baseline with vendored pure-Python modules, a byte-exact SHA-256
+    grader and the uniqueness certificate. Refuses instances whose answer is not unique.
+    """
+    try:
+        level = Difficulty.parse(difficulty)
+        instance = REGISTRY.generate(family, seed, level)
+        files = bundle_files(REGISTRY.get(family), instance)
+        write_bundle(files, out)
+    except (FamilyError, BundleError) as error:
+        _fail(str(error))
+    except OSError as error:
+        _fail(f"cannot write under {out}: {error.strerror or error}")
+    typer.echo(f"{instance.family} / {instance.difficulty} / seed {instance.seed}")
+    for folder in ("data", "solution", "baseline", "tests", "proof"):
+        count = sum(1 for name in files if name.startswith(f"{folder}/"))
+        typer.echo(f"  {folder}/: {_plural(count, 'file')}")
+    typer.echo(f"wrote {_plural(len(files), 'file')} under {out}")
+
+
+@app.command()
+def verify(
+    bundle: Annotated[Path, typer.Argument(help="A directory written by `trapforge export`.")],
+    docker: Annotated[
+        bool | None,
+        typer.Option(
+            "--docker/--no-docker",
+            help="Require or skip the Docker run (default: run it when a daemon answers).",
+        ),
+    ] = None,
+) -> None:
+    """Prove that the reference passes and the baseline fails, locally and in Docker.
+
+    Exits 1 when any check fails and 2 when the bundle directory does not exist.
+    """
+    if not (bundle / "tests" / "test_outputs.py").is_file():
+        _fail(f"{bundle} is not a task bundle (no tests/test_outputs.py)")
+    report = verify_bundle(bundle, docker=docker)
+    for check in report.checks:
+        typer.echo(f"{'ok  ' if check.passed else 'FAIL'} {check.name}: {check.detail}")
+    typer.echo("verified" if report.passed else "verification failed")
+    if not report.passed:
         raise typer.Exit(code=1)
 
 
