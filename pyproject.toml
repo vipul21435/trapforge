@@ -38,3 +38,66 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trapforge"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+    "C4",       # comprehensions
+    "RUF",      # ruff-specific
+    "PT",       # pytest style
+    "PL",       # pylint subset
+    "N",        # naming
+]
+ignore = [
+    "PLR0913",  # math kernels legitimately take many arguments
+    "PLR2004",  # small integer literals are the whole point of this codebase
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR0915", "N802", "N806"]
+# Matrix names such as A, H, U follow standard linear-algebra notation.
+"src/trapforge/linalg/**" = ["N803", "N806"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+strict = true
+warn_unreachable = true
+pretty = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+markers = [
+    "slow: tests that build bundles or spawn subprocesses",
+    "docker: tests that need a running Docker daemon",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["trapforge"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+fail_under = 85

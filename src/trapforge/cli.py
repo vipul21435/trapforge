@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 from typing import Annotated
 
 import typer
@@ -40,8 +41,6 @@ def main(
 @app.command()
 def info() -> None:
     """Print the package version and the Python it runs on."""
-    import platform
-
     typer.echo(f"trapforge {__version__} on Python {platform.python_version()}")
 
 

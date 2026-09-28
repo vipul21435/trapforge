@@ -1,0 +1,35 @@
+# Hooks run the same pinned tools as CI, straight from the uv environment.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: detect-private-key
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy (strict, src/)
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: ascii-only
+        name: ASCII-only text files
+        entry: python3 -c "import sys; bad=[f for f in sys.argv[1:] if any(b > 127 for b in open(f,'rb').read())]; print(*bad, sep='\n'); sys.exit(1 if bad else 0)"
+        language: system
+        types_or: [python, markdown, yaml, toml, dockerfile, makefile]
