@@ -41,5 +41,8 @@ run "the case split over the period leaves six worlds" \
     prove examples/wrapping-clock.json
 run "re-check the bundled certificate without running the solver" \
     check examples/ledger-anchors-unique.cert.json
+run "the registered task families" families
+run "a generated affine-ledger task: proved unique, solved by the reference, baseline trapped" \
+    generate affine-ledger --seed 7
 
-printf '\ndemo finished: every step above ran on the bundled examples/ inputs\n'
+printf '\ndemo finished: every step above ran on the bundled examples/ inputs or a seeded generator\n'

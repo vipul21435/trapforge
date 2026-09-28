@@ -2,13 +2,15 @@
 
 The commands are thin wrappers over the library: ``crt`` over :mod:`trapforge.modular`,
 ``solve`` over :mod:`trapforge.linalg`, ``system`` over :mod:`trapforge.prover.model`, and
-``prove`` and ``check`` over the prover's solver and its standalone certificate checker.
+``prove`` and ``check`` over the prover's solver and its standalone certificate checker, and
+``families`` and ``generate`` over the task-family registry.
 Every "no solution" answer and every proof is printed together with the result of
 re-checking its certificate, so the CLI never asks to be trusted.
 
 Exit codes: 0 when the input was valid (whether or not it has a solution), 1 when a check
 fails (``check`` on a certificate that does not hold, ``prove --require-unique`` on a sample
-that is not unique), 2 for input that cannot be read or parsed.
+that is not unique, ``generate`` on an instance that is not unique, not solved by its
+reference solver or not missed by its baseline), 2 for input that cannot be read or parsed.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from typing import Annotated, Any, NoReturn
 import typer
 
 from trapforge import __version__
+from trapforge.families import REGISTRY, Difficulty, FamilyError
 from trapforge.linalg import AffineLattice, LinalgError, Matrix, solve_diophantine
 from trapforge.modular import Congruence, ModularError, crt
 from trapforge.prover import (
@@ -278,6 +281,70 @@ def check_command(
         typer.echo(f"invalid: {result.reason}")
         raise typer.Exit(code=1)
     typer.echo(result.reason)
+
+
+@app.command()
+def families() -> None:
+    """List the registered task families."""
+    for family in REGISTRY:
+        typer.echo(f"{family.name}: {family.summary}")
+
+
+def _lines(data: bytes) -> list[bytes]:
+    return data.splitlines()
+
+
+@app.command()
+def generate(
+    family: Annotated[str, typer.Argument(help="A family name from `trapforge families`.")],
+    seed: Annotated[int, typer.Option(min=0, help="Non-negative seed.")] = 0,
+    difficulty: Annotated[str, typer.Option(help="easy, medium or hard.")] = "easy",
+    out: Annotated[
+        Path | None, typer.Option(help="Write the instance's files under this directory.")
+    ] = None,
+) -> None:
+    """Generate one task instance, prove it unique and run its reference and baseline.
+
+    Exits with code 1 unless the constraint system the corpus implies has exactly one
+    solution (the planted world), the reference solver reproduces the expected output byte
+    for byte, and the naive baseline gets it wrong while matching the visible sample.
+    """
+    try:
+        level = Difficulty.parse(difficulty)
+        instance = REGISTRY.generate(family, seed, level)
+    except FamilyError as error:
+        _fail(str(error))
+    found = REGISTRY.get(family)
+    typer.echo(f"{instance.family} / {instance.difficulty} / seed {instance.seed}")
+    for name, value in instance.extras.items():
+        typer.echo(f"  {name}: {value}")
+    proof = prove(instance.system)
+    unique = isinstance(proof, UniqueProof) and dict(proof.solution) == dict(instance.hidden)
+    typer.echo(f"proof: {proof} (certificate re-checked: {proof.check().valid})")
+    solved = found.solve(instance.files) == instance.expected
+    typer.echo(f"reference: {'matches' if solved else 'DIFFERS FROM'} the expected output")
+    naive = found.baseline(instance.files)
+    expected, guessed = _lines(instance.expected), _lines(naive)
+    wrong = sum(1 for a, b in zip(expected, guessed, strict=False) if a != b)
+    wrong += abs(len(expected) - len(guessed))
+    keeps_sample = set(_lines(instance.sample)) <= set(guessed)
+    typer.echo(
+        f"baseline: {wrong} of {len(expected)} output lines differ; "
+        f"{'matches' if keeps_sample else 'misses'} the visible sample"
+    )
+    typer.echo(f"sha256: {instance.digest()}")
+    if out is not None:
+        bundle = instance.bundle()
+        try:
+            for name, content in bundle.items():
+                target = out / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+        except OSError as error:
+            _fail(f"cannot write under {out}: {error.strerror or error}")
+        typer.echo(f"wrote {_plural(len(bundle), 'file')} under {out}")
+    if not (unique and solved and wrong and keeps_sample):
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":  # pragma: no cover
