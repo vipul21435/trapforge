@@ -4,9 +4,10 @@ A task is graded by comparing bytes, so the bytes must not depend on the platfor
 process, the dict insertion order or the locale. Every file a task family produces goes
 through one of these writers:
 
-* :func:`csv_bytes`: a header plus rows of ``int`` or plain ASCII ``str`` cells, comma
-  separated, ``\\n`` line endings, a final newline, no quoting (cells that would need
-  quoting are rejected instead);
+* :func:`csv_bytes`: a header plus rows of ``int`` or non-empty plain ASCII ``str`` cells,
+  comma separated, ``\\n`` line endings, a final newline, no quoting (cells that would need
+  quoting, and empty cells, are rejected instead, so :func:`parse_csv` reads back every file
+  the writer accepts);
 * :func:`json_bytes`: sorted keys, two-space indent, ASCII only, a final newline, and no
   floats (a float is not exact);
 * :func:`text_bytes`: ASCII text with ``\\n`` line endings and exactly one final newline.
@@ -52,6 +53,8 @@ def _cell(value: object, where: str) -> str:
     if type(value) is int:
         return str(value)
     if isinstance(value, str):
+        if not value:
+            raise CanonicalError(f"{where}: empty cells are not allowed")
         if not value.isascii() or not value.isprintable():
             raise CanonicalError(f"{where}: cell {value!r} is not printable ASCII")
         if _FORBIDDEN_CELL.intersection(value):
@@ -104,28 +107,34 @@ def parse_csv(data: bytes) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]
     return header, tuple(rows)
 
 
-def _check_json(value: Any, where: str) -> None:
-    if isinstance(value, bool) or value is None or type(value) is int or isinstance(value, str):
-        return
+def _plain_json(value: Any, where: str) -> Any:
+    """``value`` validated and rebuilt from plain ``dict``/``list`` (any Mapping is an object)."""
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if type(value) is int:
+        return value
     if isinstance(value, float):
         raise CanonicalError(f"{where} is a float; canonical JSON holds exact integers only")
     if isinstance(value, Mapping):
+        plain = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise CanonicalError(f"{where} has a non-string key {key!r}")
-            _check_json(item, f"{where}.{key}")
-        return
+            plain[key] = _plain_json(item, f"{where}.{key}")
+        return plain
     if isinstance(value, list | tuple):
-        for index, item in enumerate(value):
-            _check_json(item, f"{where}[{index}]")
-        return
+        return [_plain_json(item, f"{where}[{index}]") for index, item in enumerate(value)]
     raise CanonicalError(f"{where} has the unsupported type {type(value).__name__}")
 
 
 def json_bytes(value: Any) -> bytes:
-    """The canonical JSON encoding of ``value``: sorted keys, indent 2, ASCII, final newline."""
-    _check_json(value, "$")
-    text = json.dumps(value, sort_keys=True, indent=2, ensure_ascii=True, separators=(",", ": "))
+    """The canonical JSON encoding of ``value``: sorted keys, indent 2, ASCII, final newline.
+
+    Any :class:`~collections.abc.Mapping` (a ``MappingProxyType`` included) is written as a
+    JSON object and any list or tuple as an array.
+    """
+    plain = _plain_json(value, "$")
+    text = json.dumps(plain, sort_keys=True, indent=2, ensure_ascii=True, separators=(",", ": "))
     return (text + "\n").encode("ascii")
 
 

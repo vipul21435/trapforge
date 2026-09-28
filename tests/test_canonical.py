@@ -1,5 +1,7 @@
 """The canonical writers produce one byte sequence per value and reject what is not exact."""
 
+from types import MappingProxyType
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -53,6 +55,9 @@ def test_csv_layout_is_exact() -> None:
         (["a"], [[" x"]], "surrounding whitespace"),
         (["a"], [["caf\u00e9"]], "not printable ASCII"),
         (["a\nb"], [], "not printable ASCII"),
+        (["name"], [[""]], "empty cells are not allowed"),
+        ([""], [], "empty cells are not allowed"),
+        (["a", ""], [[1, 2]], "empty cells are not allowed"),
     ],
 )
 def test_csv_rejects_values_that_are_not_canonical(
@@ -89,6 +94,28 @@ def test_json_is_sorted_indented_and_integer_only() -> None:
         json_bytes({1: 2})
     with pytest.raises(CanonicalError, match="unsupported type set"):
         json_bytes({"a": {1}})
+
+
+def test_every_csv_the_writer_accepts_the_reader_loads() -> None:
+    # Regression: an empty single-column cell used to be written as a blank line, which the
+    # strict reader then rejected.
+    for header, rows in [(["name"], [["x"]]), (["a", "b"], [[1, "y"], [-2, "z"]])]:
+        assert parse_csv(csv_bytes(header, rows)) == (
+            tuple(header),
+            tuple(tuple(str(cell) for cell in row) for row in rows),
+        )
+
+
+def test_json_writes_any_mapping_as_an_object() -> None:
+    # Regression: MappingProxyType passed validation, then json.dumps raised TypeError.
+    proxy = MappingProxyType({"b": 2, "a": MappingProxyType({"k": (1, 2)})})
+    assert json_bytes(proxy) == json_bytes({"b": 2, "a": {"k": [1, 2]}})
+    assert (
+        json_bytes({"hidden": MappingProxyType({"k": 3})})
+        == b'{\n  "hidden": {\n    "k": 3\n  }\n}\n'
+    )
+    with pytest.raises(CanonicalError, match="non-string key 1"):
+        json_bytes(MappingProxyType({1: 2}))
 
 
 def test_text_has_exactly_one_final_newline() -> None:
