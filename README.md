@@ -47,7 +47,7 @@ designs, examples and data here are original.
 | Task-family plugin API | `trapforge.families` | `TaskFamily` protocol (`generate`, `solve`, `baseline`), `TaskInstance` (corpus, hidden world, expected bytes, visible sample, constraint system), `Difficulty`, a validating `Registry`, and a string-seeded RNG so a (family, difficulty, seed) triple gives the same bytes in every process |
 | Affine ledger family | `trapforge.families.ledger` | account numbers scrambled by `x -> (a*x + b) mod m` with composite `m`; every instance is gated to a unique map; a reference solver built on linear congruences; a naive baseline that treats `m` as prime and is right on the visible sample, wrong on every hidden deciding record |
 | Bundle exporter | `trapforge.bundle` | `instruction.md`, `data/`, a `Dockerfile` pinned to a `python:3.12-slim` digest, `solution/` and `baseline/` solvers that vendor TrapForge's pure-Python modules (no installs), `tests/test_outputs.py` grading byte for byte against an embedded SHA-256 (the expected bytes are not shipped), `proof/uniqueness.cert.json` and `task.json`; refuses instances whose answer is not unique; golden files pin the layout |
-| Bundle verifier | `trapforge.verify` | re-checks the certificate, runs both solvers and the grader in fresh copies with `python -I -S` (no site-packages), and repeats the runs in a container with `--network none` when Docker answers, then removes the image |
+| Bundle verifier | `trapforge.verify` | re-checks that the certificate proves a unique answer, runs both solvers and the bundle's grader in fresh copies with `python -I -S` (no site-packages), and repeats the runs in a container with `--network none` when Docker answers, then removes the image; the grader always runs on whatever the baseline wrote (a nonzero exit is not enough to count as trapped), a baseline that is missing or cannot start is a failed check, and a solver past 600 s is stopped (its container removed) and graded instead of crashing the run |
 | CLI | `trapforge` | `crt`, `solve`, `system`, `prove`, `check`, `families`, `generate`, `export` and `verify` commands over the layers above, plus `info` |
 | Container | `Dockerfile` | multi-stage uv build on `python:3.12-slim` pinned by digest, non-root user, `LABEL project=trapforge` |
 | Demo | `make demo` | `scripts/demo.sh` runs the CLI over the bundled `examples/` inputs and one generated task, then exports and verifies it (the image run skips the two bundle steps) |
@@ -68,9 +68,9 @@ make check     # ruff, mypy --strict, pytest with the 85% branch-coverage gate
 make demo      # the CLI end to end on examples/
 ```
 
-These five commands were run in a fresh clone: `make check` reported 722 passed at 100%
-branch coverage, and the whole sequence (clone, sync, check, demo) took 39 s wall time on an
-Apple-silicon laptop. With Docker, `make docker-demo` builds the image and runs the same demo
+These five commands were run in a fresh clone: `make check` reported 792 passed at 99.66%
+branch coverage, and the whole sequence (clone, sync, check, demo) took 57 s wall time on an
+Apple-silicon laptop, Docker test and demo steps included. With Docker, `make docker-demo` builds the image and runs the same demo
 inside it.
 
 ## CLI usage
@@ -533,17 +533,17 @@ Every number here comes from a command in this repo, run on the current tree.
 
 | Number | Value | Command |
 | --- | --- | --- |
-| Tests | 760 passed (59 CLI, 1 demo script, 13 doctest modules, 78 linalg, 89 modular, 122 prover, 28 canonical writers, 350 families: 26 plugin API, 324 affine ledger; 20 bundle and verify) | `make cov` and `uv run pytest -q --co` |
+| Tests | 792 passed, Docker test included (62 CLI, 1 demo script, 13 doctest modules, 78 linalg, 89 modular, 122 prover, 33 canonical writers, 367 families: 34 plugin API, 333 affine ledger; 27 bundle and verify) | `make cov` and `uv run pytest -q --co` |
 | Ledger instances checked by the test suite | 73 (seeds 0-39 easy, 0-24 medium, 0-7 hard): each proved unique with a re-checked certificate, reproduced by the reference solver, missed by the baseline on every deciding record | `uv run pytest -q tests/test_family_ledger.py` |
 | Ledger instances through the CLI gate | 300 of 300 exit 0 (seeds 0-99 at each difficulty) | `for d in easy medium hard; do for s in $(seq 0 99); do uv run trapforge generate affine-ledger --seed $s --difficulty $d > /dev/null \|\| echo "FAIL $d $s"; done; done` |
 | Ledger generation time (gate proofs included) | median 0.7 ms easy, 2.2 ms medium, 16.1 ms hard; slowest 30.6 ms (seeds 0-99 each; varies a few ms between runs) | the timing snippet below |
 | Tampered certificates rejected | 40 hand-written tamperings, each with its expected reason | `uv run pytest -q tests/test_prover_certificate.py -k tampered` |
-| Branch coverage of `src/` | 99.69% (2196 statements, 678 branches); CI fails under 85% | `make cov` |
-| Demo wall time | 5.2 s for all 17 steps, Docker verification included | `time make demo` |
+| Branch coverage of `src/` | 99.66% (2250 statements, 696 branches); CI fails under 85% | `make cov` |
+| Demo wall time | 3.9 s for all 17 steps, Docker verification included | `time make demo` |
 | Bundle verification | 6 of 6 checks pass for `affine-ledger` seed 7 (certificate; reference passes and baseline fails, locally and in Docker with `--network none`) | `trapforge export affine-ledger --seed 7 --out bundle && trapforge verify bundle` |
 | Wide-box proof | `x + y = 10` with both unknowns in `0..10**9`: exactly 11 worlds, 0.14 s wall for the whole `prove` command (it took minutes before the projected walk) | `time uv run trapforge prove examples/wide-sum.json` |
 | Image size | 47.7 MB content size (223 MB unpacked on disk) | `make docker-build && docker images trapforge` |
-| Source and test size | 4701 lines in `src/`, 4279 lines in `tests/` | `git ls-files src \| xargs wc -l`, same for `tests` |
+| Source and test size | 4798 lines in `src/`, 4446 lines in `tests/` | `git ls-files src \| xargs wc -l`, same for `tests` |
 
 The timing snippet (Apple-silicon laptop, one process, `uv run python -`):
 
@@ -602,15 +602,48 @@ its verdict and count must be the truth. CI runs a derandomized profile
 - **sympy is a test oracle, not a dependency.** The runtime depends only on Typer, so an
   exported reference solver vendors the math modules and runs in a bare `python:3.12-slim`
   image; `verify` runs it with `python -I -S` to prove nothing else is needed.
-- **Graders that do not leak the answer.** A bundle embeds only the SHA-256 and the byte
-  count of the expected output, and it ships only instances with a proved unique answer.
-- **Box walks that cost what the answer costs.** Before enumerating lattice points, every
-  box bound is projected onto the leading parameters (integer Fourier-Motzkin), so a
-  system with 11 solutions in a box of width 10**9 takes 11 steps, not 10**9.
+- **Graders that do not embed the answer.** The grader holds only the SHA-256 and the byte
+  count of the expected output, and a bundle ships only instances with a proved unique
+  answer. The certificate in `proof/` does contain the hidden map, so an agent should get
+  the image built from the bundle's `Dockerfile` (which copies only `instruction.md` and
+  `data/`), not the bundle directory; see Known issues.
+- **Box walks that usually cost what the answer costs.** Before enumerating lattice points,
+  every box bound is projected onto the leading parameters (Fourier-Motzkin), so a system
+  with 11 solutions in a box of width 10**9 takes 11 steps, not 10**9. The projection is of
+  the real relaxation, so integer-hollow lattices are still walked in time linear in the
+  width; see Known issues.
 - **Reproducible builds.** `uv.lock` is enforced with `uv sync --locked` in CI and in the
   Dockerfile, and both base images are pinned by digest.
 
 The full decision log lives in [PLAN.md](PLAN.md).
+
+## Known issues
+
+Found in review and not fixed yet.
+
+- **`verify` does not bind the certificate or the grader to the bundle.** It requires a
+  valid `unique` certificate but does not compare its system with `data/` or `task.json`,
+  and it uses the bundle's own `tests/test_outputs.py` as the oracle without checking its
+  embedded digest against `task.json`. A swapped certificate or a weakened grader still
+  verifies.
+- **`proof/uniqueness.cert.json` reveals the answer.** Its witness is the hidden map, and
+  the expected output follows from it and `data/`. Hand agents the built image, not the
+  bundle directory. The generated grader's docstring still says the bundle does not
+  reveal the answer.
+- **Hollow lattices make box walks slow.** On a system such as `x - N*y - z = 0` with `z`
+  fixed, the walk visits every value of `x` in the box, not only the few that extend, so a
+  small certificate with very wide bounds can stall `check_certificate`, `trapforge check`
+  and `trapforge verify`.
+- **Ledger overflow errors.** A balance whose decimal form passes Python's 4300-digit
+  conversion limit raises a plain `ValueError` from the writers instead of `LedgerError`,
+  and `canonical.csv_bytes` / `json_bytes` raise `ValueError` instead of `CanonicalError`
+  for such integers.
+- **Ledger input leniency.** A `ledger.csv` account outside `0..m-1` is dropped silently
+  instead of rejected, and `-0` or leading zeros in `queries.csv` are accepted, which can
+  produce duplicate output rows.
+- **`TaskInstance` validation gaps.** `family` is not type-checked, a non-mapping `files`
+  raises `AttributeError`, an unhashable `output` raises `TypeError`, and integers past the
+  digit limit in `seed` or `extras` raise `ValueError`, all instead of `FamilyError`.
 
 ## Roadmap
 
