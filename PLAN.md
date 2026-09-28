@@ -30,7 +30,7 @@ byte-identical across runs, processes and platforms.
 Each slice is a coherent feature delivered as 3-4 real commits with tests; the suite stays
 green (ruff, mypy --strict, pytest with the 85% coverage gate) after every commit.
 
-### Slice 1: Modular arithmetic core
+### Slice 1: Modular arithmetic core [x] done
 
 Goal: Implement `trapforge.modular` in pure Python: extended gcd, modular inverse with a typed error when none exists, CRT for pairs and lists including non-coprime moduli (returning the combined residue and lcm, or a proven inconsistency), the full solution set of a single linear congruence a*x = b (mod m), and systems of linear congruences in one unknown with mixed moduli. Property-test every function with hypothesis against brute force on small moduli and against sympy.ntheory.modular (dev-only oracle).
 
@@ -75,3 +75,15 @@ Goal: Add `trapforge report`, which runs N seeds per family and difficulty and r
 - 2026-09-29: sympy is a dev-only dependency used as a test oracle; the runtime depends only on
   typer, so exported reference solvers can run in a bare python:3.12-slim image.
 - 2026-09-29: Coverage gate set at 85% branch coverage in pyproject and enforced in CI.
+- 2026-09-29 (slice 1): Inconsistent congruence systems return proof objects
+  (`UnsolvableCongruence`, `ConflictingCongruences`, together `Inconsistency`) instead of
+  raising, because the prover must report why a sample is inconsistent; each proof has a
+  `verify(system)` that re-checks it with a gcd, a product and remainders, never by solving.
+  Invalid input (modulus < 1, a non-invertible element) still raises a `ModularError`.
+- 2026-09-29 (slice 1): `mod_inverse(a, 1)` returns 0 (Z/1Z is the zero ring), matching
+  `pow(a, -1, 1)`; sympy refuses m == 1, so the sympy oracle test draws m >= 2.
+- 2026-09-29 (slice 1): sympy's `crt()` reports the product of the moduli even when they
+  share factors, so it is an oracle only for pairwise-coprime moduli; `solve_congruence()`
+  is the oracle for the non-coprime case.
+- 2026-09-29 (slice 1): Hypothesis uses a random `dev` profile locally and a derandomized
+  `ci` profile in CI (`HYPOTHESIS_PROFILE=ci`), so CI failures always reproduce.
