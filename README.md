@@ -99,6 +99,65 @@ against brute force on small moduli and against `sympy` (`igcdex`, `mod_inverse`
 30-digit planted solutions and tampered proofs that `verify` must reject. CI runs a
 derandomized profile (`HYPOTHESIS_PROFILE=ci`) so any failure reproduces.
 
+## What works today: the exact integer linear algebra core
+
+`trapforge.linalg` answers the questions the uniqueness prover asks about integer linear
+systems: does `A x = b` have an integer solution, what is the whole solution set, and how
+many of its points fit inside the bounds of the hidden parameters? Like the modular core it
+is pure Python `int` arithmetic with no floats and no dependencies.
+
+| API | What it does |
+| --- | --- |
+| `Matrix` | immutable integer matrix: `@`, `transpose`, `identity`, Bareiss `determinant`, `rank` |
+| `hermite_normal_form(A)` | row-style HNF `H` and unimodular `U` with `U @ A == H`, plus pivots and left kernel |
+| `smith_normal_form(A)` | `S`, `U`, `V` with `U @ A @ V == S` and invariant factors `d_1 \| d_2 \| ...` |
+| `kernel_basis(A)` | canonical (Hermite form) basis of every integer `x` with `A x = 0` |
+| `solve_diophantine(A, b)` | all integer solutions as an `AffineLattice`, or an `UnsolvableSystem` proof |
+| `AffineLattice.points_in_box(lo, hi)` | exact, lexicographic enumeration of the solutions inside a box |
+
+Solution sets are stored canonically (kernel basis in Hermite normal form, particular
+solution reduced modulo it), so two descriptions of the same set compare equal. An
+infeasible system comes back as a certificate `(w, d)`: every coefficient of `w A` is a
+multiple of `d` but `w . b` is not, so no integer `x` can work (`d = 0` means there is no
+rational solution either). `verify(A, b)` re-checks it with one product and one dot product.
+
+```python
+from trapforge.linalg import Matrix, smith_normal_form, solve_diophantine
+
+# Three hidden digits, observed only through two weighted checksums.
+A = Matrix.of([[1, 10, 100], [7, 3, 1]])
+solutions = solve_diophantine(A, [724, 41])
+print(solutions)
+print(list(solutions.points_in_box((0, 0, 0), (9, 9, 9))))
+
+# Even coefficients can never produce an odd total: a checkable proof, not just "no".
+B = Matrix.of([[2, 4], [6, 8]])
+proof = solve_diophantine(B, [1, 1])
+print(proof)
+print(proof.verify(B, [1, 1]))
+
+# Smith normal form with both transforms: U @ C @ V == S.
+C = Matrix.of([[2, 4, 4], [-6, 6, 12], [10, -4, -16]])
+form = smith_normal_form(C)
+print(form.invariant_factors, form.U @ C @ form.V == form.S)
+```
+
+Output (from `uv run python` on the snippet above):
+
+```text
+x = (4, 2, 7) + t0*(290, -699, 67), t in Z^1
+[(4, 2, 7)]
+no integer solution: weighting the equations by (0, 1) makes every coefficient a multiple of 2, but the right-hand side becomes 1, which is not
+True
+(2, 6, 12) True
+```
+
+The test suite checks `U @ A == H`, `U @ A @ V == S`, `|det U| = |det V| = 1`, the SNF
+divisibility chain and the determinantal-divisor identity with Hypothesis on dense, sparse,
+low-rank and repeated-row matrices; compares the forms exactly with sympy's
+`hermite_normal_form` and `smith_normal_form`; and checks the solver against brute force
+over boxes, planted 30-digit solutions and tampered certificates.
+
 ## Planned task families
 
 | Family | Hidden structure | Why the naive approach fails |
@@ -115,9 +174,10 @@ this README only reports numbers that come from commands in the repo.
 | Slice | State |
 | --- | --- |
 | 1. Modular arithmetic core | done |
-| 2-9. Integer linear algebra, prover, task families, bundles, Docker, report | planned |
+| 2. Exact integer linear algebra core | done |
+| 3-9. Uniqueness prover, task families, bundles, Docker, report | planned |
 
-`make cov` on the current tree: 70 tests passed, 100% branch coverage of `src/`.
+`make cov` on the current tree: 151 tests passed, 100% branch coverage of `src/`.
 
 ## License
 

@@ -34,7 +34,7 @@ green (ruff, mypy --strict, pytest with the 85% coverage gate) after every commi
 
 Goal: Implement `trapforge.modular` in pure Python: extended gcd, modular inverse with a typed error when none exists, CRT for pairs and lists including non-coprime moduli (returning the combined residue and lcm, or a proven inconsistency), the full solution set of a single linear congruence a*x = b (mod m), and systems of linear congruences in one unknown with mixed moduli. Property-test every function with hypothesis against brute force on small moduli and against sympy.ntheory.modular (dev-only oracle).
 
-### Slice 2: Exact integer linear algebra core
+### Slice 2: Exact integer linear algebra core [x] done
 
 Goal: Implement `trapforge.linalg` over Python ints: an immutable integer matrix helper layer (multiply, transpose, identity, fraction-free determinant, rank), Hermite normal form with its unimodular transform, Smith normal form with both unimodular transforms, integer kernel bases, and a linear Diophantine system solver returning a particular solution plus a kernel lattice basis (or a proof of infeasibility), with bounded enumeration of lattice points in a box. Property-test with hypothesis: U*A = H, U*A*V = S, divisibility chain of the SNF diagonal, |det U| = 1, and agreement with sympy's hermite_normal_form / smith_normal_form.
 
@@ -87,3 +87,30 @@ Goal: Add `trapforge report`, which runs N seeds per family and difficulty and r
   is the oracle for the non-coprime case.
 - 2026-09-29 (slice 1): Hypothesis uses a random `dev` profile locally and a derandomized
   `ci` profile in CI (`HYPOTHESIS_PROFILE=ci`), so CI failures always reproduce.
+- 2026-09-29 (slice 2): `Matrix` is a frozen dataclass holding the tuple-of-int-tuples rows
+  plus an explicit `ncols`, instead of a bare `tuple[tuple[int, ...], ...]`: a matrix with no
+  rows (the kernel basis of an injective map, a system with no equations) must keep its
+  width. Entries must be plain `int`; `Matrix.of` converts anything with `__index__` and
+  rejects floats and Fractions.
+- 2026-09-29 (slice 2): The Hermite normal form is row style (`U @ A == H`, leading entries
+  positive, entries above a pivot reduced into `range(pivot)`). sympy's
+  `hermite_normal_form` is column style with pivots at the bottom of each column, so the
+  oracle test compares against it after transposing and reversing both the coordinate order
+  and the basis order; HNF uniqueness makes that an exact comparison.
+- 2026-09-29 (slice 2): `smith_normal_form` diagonalizes the Hermite form of `A` rather than
+  `A` itself. On one seeded dense 10x10 matrix with entries up to 1000 this cut the largest
+  entry of `V` from 539 digits to 31; a regression test bounds the transform size on five
+  seeded dense matrices.
+- 2026-09-29 (slice 2): Infeasible systems return an `UnsolvableSystem(w, d, rhs)`
+  certificate (integer Fredholm alternative): `d` divides every entry of `w A` but not
+  `w . b`, with `d = 0` for systems that have no rational solution. Rational failures are
+  reported before divisibility failures, and divisibility certificates are shrunk to
+  symmetric residues modulo `d`.
+- 2026-09-29 (slice 2): Solution sets are `AffineLattice` values in canonical form (kernel
+  basis in Hermite form, point reduced modulo it), so equality of sets is `==`.
+  `points_in_box` walks the Hermite basis pivot by pivot, is always finite, and yields points
+  in lexicographic order as a lazy iterator, so a caller that only needs to know whether a
+  second point exists can stop after two with `itertools.islice`.
+- 2026-09-29 (slice 2): Shared Hypothesis matrix strategies live in `tests/_strategies.py`
+  (dense, sparse, low-rank products, repeated rows, random unimodular matrices), because
+  uniformly random integer matrices are almost always full rank.
