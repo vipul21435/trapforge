@@ -7,12 +7,20 @@ box. This package provides that in pure Python, with no floats and no dependenci
 exported reference solvers can vendor it unchanged.
 """
 
+from trapforge.linalg.hermite import HermiteForm, hermite_normal_form, is_hermite_normal_form
 from trapforge.linalg.matrix import LinalgError, Matrix, ShapeError, Vector, dot
+from trapforge.linalg.smith import SmithForm, is_smith_normal_form, smith_normal_form
 
 __all__ = [
+    "HermiteForm",
     "LinalgError",
     "Matrix",
     "ShapeError",
+    "SmithForm",
     "Vector",
     "dot",
+    "hermite_normal_form",
+    "is_hermite_normal_form",
+    "is_smith_normal_form",
+    "smith_normal_form",
 ]

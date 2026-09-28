@@ -86,3 +86,27 @@ def to_sympy(matrix: Matrix) -> sympy.Matrix:
 def from_sympy(matrix: sympy.Matrix) -> Matrix:
     """Convert a sympy integer Matrix back, keeping the shape even when it is empty."""
     return Matrix.of(matrix.tolist(), ncols=matrix.cols)
+
+
+@st.composite
+def unimodular_matrices(draw: st.DrawFn, n: int, max_steps: int = 8) -> Matrix:
+    """A random ``n x n`` integer matrix with determinant +1 or -1.
+
+    Built as a product of elementary operations (add a multiple of one row to another, swap
+    two rows, negate a row), each of which is invertible over the integers.
+    """
+    rows = Matrix.identity(n).to_lists()
+    if n == 0:
+        return Matrix.identity(0)
+    for _ in range(draw(st.integers(0, max_steps))):
+        kind = draw(st.sampled_from(["add", "swap", "negate"]))
+        i = draw(st.integers(0, n - 1))
+        j = draw(st.integers(0, n - 1))
+        if kind == "add" and i != j:
+            factor = draw(st.integers(-3, 3))
+            rows[i] = [a + factor * b for a, b in zip(rows[i], rows[j], strict=True)]
+        elif kind == "swap":
+            rows[i], rows[j] = rows[j], rows[i]
+        else:
+            rows[i] = [-a for a in rows[i]]
+    return Matrix.of(rows, ncols=n)

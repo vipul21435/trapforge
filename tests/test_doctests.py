@@ -6,10 +6,10 @@ from types import ModuleType
 import pytest
 
 from trapforge import modular
-from trapforge.linalg import matrix
+from trapforge.linalg import hermite, matrix, smith
 
 
-@pytest.mark.parametrize("module", [modular, matrix], ids=lambda m: m.__name__)
+@pytest.mark.parametrize("module", [modular, matrix, hermite, smith], ids=lambda m: m.__name__)
 def test_docstring_examples(module: ModuleType) -> None:
     result = doctest.testmod(module, optionflags=doctest.ELLIPSIS)
     assert result.attempted > 0
