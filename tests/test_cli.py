@@ -304,3 +304,18 @@ def test_check_rejects_a_tampered_certificate(tmp_path: Path) -> None:
     broken = tmp_path / "broken.json"
     broken.write_text("{", encoding="utf-8")
     assert run("check", str(broken))[0] == 2
+
+
+@pytest.mark.parametrize("command", ["prove", "check", "solve"])
+def test_undecodable_or_deeply_nested_files_exit_2_not_1(tmp_path: Path, command: str) -> None:
+    # Exit 1 means "the check failed", so input that cannot be parsed must never produce it.
+    binary = tmp_path / "bin.json"
+    binary.write_bytes(b"\xff\xfe\x00bad")
+    code, out = run(command, str(binary))
+    assert code == 2
+    assert "is not UTF-8 text" in out
+    deep = tmp_path / "deep.json"
+    deep.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    code, out = run(command, str(deep))
+    assert code == 2
+    assert "nested too deeply" in out

@@ -10,6 +10,8 @@ uniqueness prover uses to decide whether bounded hidden parameters are pinned do
 
 from __future__ import annotations
 
+import itertools
+import math
 import operator
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -20,6 +22,7 @@ from trapforge.linalg.matrix import LinalgError, Matrix, ShapeError, Vector
 
 __all__ = [
     "AffineLattice",
+    "box_points",
     "kernel_basis",
 ]
 
@@ -149,45 +152,120 @@ class AffineLattice:
     def points_in_box(self, lower: Sequence[int], upper: Sequence[int]) -> Iterator[Vector]:
         """Every element ``x`` with ``lower[j] <= x[j] <= upper[j]`` for all ``j``.
 
-        Points come out in increasing lexicographic order, and the search never leaves the
-        box: in the Hermite basis, coordinate ``pivot[i]`` depends only on the first ``i + 1``
-        parameters and grows with the last of them, so each parameter ranges over an exact
-        interval and every coordinate is checked as soon as it is fully determined. The set
-        is always finite, because every parameter moves some coordinate.
+        Points come out in increasing lexicographic order. In the Hermite basis, coordinate
+        ``pivot[i]`` depends only on the first ``i + 1`` parameters, so the parameters are
+        chosen one at a time; before the walk starts, Fourier-Motzkin elimination projects
+        every box bound onto the leading parameters, so each parameter ranges only over
+        values that the *later* coordinates can still accept. The cost therefore follows the
+        number of solutions rather than the width of the box: ``x + y = 10`` over a box of
+        width ``10**9`` takes eleven steps, not a billion. The set is always finite, because
+        every parameter moves its own pivot coordinate.
         """
         n = self.ambient_dimension
         if len(lower) != n or len(upper) != n:
             raise ShapeError(f"box bounds must have {n} entries each")
-        pivots = _leading_columns(self.basis)
-        return self._search(0, list(self.point), pivots, lower, upper)
-
-    def _search(
-        self,
-        level: int,
-        partial: list[int],
-        pivots: tuple[int, ...],
-        lower: Sequence[int],
-        upper: Sequence[int],
-    ) -> Iterator[Vector]:
-        # Coordinates strictly between the previous pivot and this one are now final.
-        start = pivots[level - 1] + 1 if level else 0
-        stop = pivots[level] if level < len(pivots) else len(partial)
-        if any(not lower[j] <= partial[j] <= upper[j] for j in range(start, stop)):
-            return
-        if level == len(pivots):
-            yield tuple(partial)
-            return
-        row = self.basis.rows[level]
-        column = pivots[level]
-        step = row[column]
-        first = -((partial[column] - lower[column]) // step)  # ceil((lower - x) / step)
-        last = (upper[column] - partial[column]) // step
-        for t in range(first, last + 1):
-            moved = [value + t * entry for value, entry in zip(partial, row, strict=True)]
-            yield from self._search(level + 1, moved, pivots, lower, upper)
+        return box_points(self.point, self.basis.rows, lower, upper)
 
     def __str__(self) -> str:
         terms = [_format_vector(self.point)]
         terms += [f"t{i}*{_format_vector(row)}" for i, row in enumerate(self.basis.rows)]
         suffix = f", t in Z^{self.dimension}" if self.dimension else ""
         return "x = " + " + ".join(terms) + suffix
+
+
+#: Largest number of pairwise combinations one elimination step may create. Beyond it the
+#: projection stops (which is sound: it only weakens the bounds of the leading parameters).
+PROJECTION_LIMIT = 4096
+
+
+def _normalized(coefficients: tuple[int, ...], bound: int) -> tuple[tuple[int, ...], int]:
+    # a . t <= c over the integers is equivalent to (a / g) . t <= floor(c / g).
+    divisor = math.gcd(*coefficients)
+    if divisor > 1:
+        return tuple(value // divisor for value in coefficients), bound // divisor
+    return coefficients, bound
+
+
+def _project_bounds(
+    point: Sequence[int],
+    rows: Sequence[Sequence[int]],
+    lower: Sequence[int],
+    upper: Sequence[int],
+) -> list[dict[tuple[int, ...], int]] | None:
+    """Inequalities ``a . t <= c`` on the parameters, grouped by their last parameter.
+
+    Level ``i`` holds every box bound whose last nonzero coefficient is ``t_i``, plus the
+    Fourier-Motzkin shadows of the later levels. ``None`` means the box holds no point.
+    """
+    k = len(rows)
+    levels: list[dict[tuple[int, ...], int]] = [{} for _ in range(k)]
+
+    def add(coefficients: tuple[int, ...], bound: int) -> bool:
+        coefficients, bound = _normalized(coefficients, bound)
+        last = next((i for i in reversed(range(k)) if coefficients[i]), None)
+        if last is None:
+            return bound >= 0
+        level = levels[last]
+        level[coefficients] = min(bound, level.get(coefficients, bound))
+        return True
+
+    for j, base in enumerate(point):
+        column = tuple(row[j] for row in rows)
+        if not add(column, upper[j] - base) or not add(tuple(-v for v in column), base - lower[j]):
+            return None
+    for i in reversed(range(1, k)):
+        above = [(a, c) for a, c in levels[i].items() if a[i] > 0]
+        below = [(a, c) for a, c in levels[i].items() if a[i] < 0]
+        if len(above) * len(below) > PROJECTION_LIMIT:
+            continue
+        for (a, c), (b, d) in itertools.product(above, below):
+            p, q = a[i], -b[i]
+            combined = tuple(q * x + p * y for x, y in zip(a, b, strict=True))
+            if not add(combined, q * c + p * d):
+                return None
+    return levels
+
+
+def box_points(
+    point: Sequence[int],
+    rows: Sequence[Sequence[int]],
+    lower: Sequence[int],
+    upper: Sequence[int],
+) -> Iterator[Vector]:
+    """Points ``point + sum(t_i * rows[i])`` inside the box, in lexicographic order of ``t``.
+
+    ``rows`` must be in echelon form with positive leading entries (a Hermite basis), which
+    gives every parameter a bound of its own and makes the walk finite. Pure Python and
+    standard library only.
+    """
+    levels = _project_bounds(point, rows, lower, upper)
+    if levels is None:
+        return
+    k = len(rows)
+    chosen: list[int] = []
+
+    def walk(level: int) -> Iterator[Vector]:
+        if level == k:
+            yield tuple(
+                base + sum(t * row[j] for t, row in zip(chosen, rows, strict=True))
+                for j, base in enumerate(point)
+            )
+            return
+        first: int | None = None
+        last: int | None = None
+        for coefficients, bound in levels[level].items():
+            rest = bound - sum(a * t for a, t in zip(coefficients, chosen, strict=False))
+            step = coefficients[level]
+            if step > 0:
+                last = rest // step if last is None else min(last, rest // step)
+            else:
+                low = -(rest // -step)
+                first = low if first is None else max(first, low)
+        if first is None or last is None:  # pragma: no cover - a pivot bounds both ways
+            raise LinalgError("rows are not in echelon form with positive leading entries")
+        for t in range(first, last + 1):
+            chosen.append(t)
+            yield from walk(level + 1)
+            chosen.pop()
+
+    yield from walk(0)

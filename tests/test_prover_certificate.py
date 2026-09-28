@@ -4,6 +4,7 @@ import ast
 import copy
 import json
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
@@ -190,7 +191,15 @@ def test_the_checker_imports_only_the_standard_library() -> None:
         if isinstance(node, ast.Import | ast.ImportFrom)
         for alias in node.names
     }
-    stdlib = {"__future__", "itertools", "json", "collections.abc", "dataclasses", "typing"}
+    stdlib = {
+        "__future__",
+        "itertools",
+        "json",
+        "math",
+        "collections.abc",
+        "dataclasses",
+        "typing",
+    }
     assert imported == stdlib
 
 
@@ -227,3 +236,63 @@ def test_whatever_the_checker_accepts_is_true(
     if check.valid:
         assert check.count == len(truth)
         assert cert["witnesses"] == truth[:2]
+
+
+def test_a_huge_declared_case_split_is_rejected_without_building_it(
+    time_limit: Callable[[float], AbstractContextManager[None]],
+) -> None:
+    # About 1.5 KB of JSON declaring 2**40 cases: the checker must compare sizes first
+    # instead of materializing the product (which used to take 2**k dicts of memory).
+    cert = {
+        "format": "trapforge-uniqueness-certificate",
+        "version": 1,
+        "cap": 2,
+        "verdict": "unique",
+        "count": 1,
+        "exact": True,
+        "witnesses": [],
+        "cases": [],
+        "system": {
+            "choices": [{"name": f"c{i}", "options": [0, 1]} for i in range(40)],
+            "unknowns": [],
+            "constraints": [],
+        },
+    }
+    with time_limit(5):
+        result = check_certificate(json.dumps(cert))
+    assert not result.valid
+    assert result.reason == f"the certificate must cover all {2**40} cases"
+
+
+def test_deeply_nested_text_is_malformed_not_an_exception() -> None:
+    result = check_certificate("[" * 100_000 + "]" * 100_000)
+    assert not result.valid
+    assert "nested too deeply" in result.reason
+
+
+def test_a_wide_box_certificate_is_checked_quickly(
+    time_limit: Callable[[float], AbstractContextManager[None]],
+) -> None:
+    system = ConstraintSystem.build(
+        dict.fromkeys(("d0", "d1", "d2"), (0, 10**9)),
+        [Equation.of({"d0": 1, "d1": 1, "d2": 1}, 13)],
+    )
+    with time_limit(10):
+        cert = prove(system).certificate
+        result = check_certificate(cert)
+    assert result.valid
+    assert result.reason == "verified: ambiguous, 105 solutions"
+
+
+def test_a_product_of_two_choices_must_be_listed_in_product_order() -> None:
+    system = ConstraintSystem.build(
+        {"x": (ChoiceTerm("P"), 9)},
+        [Congruent.of({"x": 1}, 0, ChoiceTerm("Q"))],
+        {"P": (1, 5), "Q": (2, 3)},
+    )
+    cert = copy.deepcopy(dict(prove(system, cap=50).certificate))
+    assert check_certificate(cert).valid
+    cert["cases"][1], cert["cases"][2] = cert["cases"][2], cert["cases"][1]
+    result = check_certificate(cert)
+    assert not result.valid
+    assert result.reason == "case 1 should be {'P': 1, 'Q': 3}"

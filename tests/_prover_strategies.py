@@ -1,8 +1,10 @@
 """Hypothesis strategies for small constraint systems, plus a brute-force oracle.
 
 The systems are small enough to enumerate outright (at most three unknowns with boxes of at
-most seven values, at most three cases), yet they mix every feature of the model: equations,
-congruences, choice-dependent coefficients, moduli and bounds, and empty boxes.
+most seven values, at most nine cases), yet they mix every feature of the model: equations,
+congruences, choice-dependent coefficients, moduli and bounds (lower and upper), empty boxes,
+and a case split over a product of two choices, so the order in which cases are listed is
+exercised by a real product.
 """
 
 from __future__ import annotations
@@ -18,27 +20,39 @@ NAMES = ("x", "y", "z")
 
 @st.composite
 def small_systems(draw: st.DrawFn) -> ConstraintSystem:
-    """A random system with 1-3 unknowns, 0-4 constraints and at most one choice ``P``."""
-    has_choice = draw(st.booleans())
-    options = (
-        draw(st.lists(st.integers(1, 6), min_size=1, max_size=3, unique=True)) if has_choice else []
-    )
-    choices = {"P": options} if has_choice else {}
+    """A random system with 1-3 unknowns, 0-4 constraints and zero, one or two choices."""
+    choice_names = ("P", "Q")[: draw(st.integers(0, 2))]
+    choices = {
+        name: draw(st.lists(st.integers(1, 6), min_size=1, max_size=3, unique=True))
+        for name in choice_names
+    }
+
+    def term() -> st.SearchStrategy[Scalar]:
+        return st.builds(
+            ChoiceTerm,
+            st.sampled_from(choice_names),
+            st.sampled_from([1, -1, 2]),
+            st.integers(-2, 2),
+        )
 
     def scalar(low: int, high: int) -> st.SearchStrategy[Scalar]:
         plain: st.SearchStrategy[Scalar] = st.integers(low, high)
-        if not has_choice:
+        if not choice_names:
             return plain
-        term = st.builds(ChoiceTerm, st.just("P"), st.sampled_from([1, -1, 2]), st.integers(-2, 2))
-        return st.one_of(plain, plain, term)
+        return st.one_of(plain, plain, term())
 
     names = NAMES[: draw(st.integers(1, 3))]
     unknowns: dict[str, tuple[Scalar, Scalar]] = {}
     for name in names:
-        lower = draw(st.integers(-4, 2))
-        upper: Scalar = lower + draw(st.integers(-1, 6))
-        if has_choice and draw(st.integers(0, 4)) == 0:
-            upper = ChoiceTerm("P", 1, -1)
+        base = draw(st.integers(-4, 2))
+        lower: Scalar = base
+        upper: Scalar = base + draw(st.integers(-1, 6))
+        if choice_names and draw(st.integers(0, 4)) == 0:
+            # Lower bounds from ``base`` to ``base + 5``, so the box never grows past 7 values.
+            lower = ChoiceTerm(draw(st.sampled_from(choice_names)), 1, base - 1)
+            upper = base + 6
+        elif choice_names and draw(st.integers(0, 4)) == 0:
+            upper = ChoiceTerm(draw(st.sampled_from(choice_names)), 1, -1)
         unknowns[name] = (lower, upper)
 
     constraints: list[Constraint] = []
@@ -50,8 +64,8 @@ def small_systems(draw: st.DrawFn) -> ConstraintSystem:
             constraints.append(Equation.of(terms, rhs, f"e{index}"))
         else:
             modulus: Scalar = draw(st.integers(1, 8))
-            if has_choice and draw(st.booleans()):
-                modulus = ChoiceTerm("P")
+            if choice_names and draw(st.booleans()):
+                modulus = ChoiceTerm(draw(st.sampled_from(choice_names)))
             constraints.append(Congruent.of(terms, rhs, modulus, f"c{index}"))
     return ConstraintSystem.build(unknowns, constraints, choices)
 

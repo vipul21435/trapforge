@@ -2,6 +2,8 @@
 
 import json
 import math
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pytest
@@ -262,3 +264,56 @@ def test_the_certificate_embeds_the_system_it_talks_about() -> None:
     proof = prove(CLOCK)
     assert ConstraintSystem.from_json_dict(proof.certificate["system"]) == CLOCK
     assert proof.system is CLOCK
+
+
+# -- wide boxes -----------------------------------------------------------------------------
+
+
+def test_equations_over_wide_boxes_cost_the_solutions_not_the_width(
+    time_limit: Callable[[float], AbstractContextManager[None]],
+) -> None:
+    # Regression: the walk used to try every value of the first unknown in its box, so
+    # these took minutes (x + y = 10 at 10**9) or hours (three digits at 10**5).
+    with time_limit(10):
+        pair = ConstraintSystem.build(
+            {"x": (0, 10**9), "y": (0, 10**9)}, [Equation.of({"x": 1, "y": 1}, 10, "total")]
+        )
+        proof = prove(pair)
+        assert isinstance(proof, Ambiguity)
+        assert (proof.count, proof.exact) == (11, True)
+        assert check_certificate(proof.certificate).valid
+        digits = ConstraintSystem.build(
+            dict.fromkeys(("d0", "d1", "d2"), (0, 10**5)),
+            [Equation.of({"d0": 1, "d1": 1, "d2": 1}, 13)],
+        )
+        proof = prove(digits)
+        assert isinstance(proof, Ambiguity)
+        assert (proof.count, proof.exact) == (105, True)
+        assert check_certificate(proof.certificate).valid
+        # A wrapping clock: T = P * w + 5 with a timestamp-sized T and a small wrap count.
+        clock = ConstraintSystem.build(
+            {"T": (0, 10**15), "w": (0, 9)},
+            [Equation.of({"T": 1, "w": ChoiceTerm("P", -1)}, 5)],
+            {"P": (7, 11)},
+        )
+        proof = prove(clock)
+        assert isinstance(proof, Ambiguity)
+        assert (proof.count, proof.exact) == (20, True)
+        assert check_certificate(proof.certificate).valid
+
+
+def test_a_product_of_two_choices_is_proved_in_case_order() -> None:
+    system = ConstraintSystem.build(
+        {"x": (ChoiceTerm("Q", 1, -1), 6)},
+        [Congruent.of({"x": 1}, 1, ChoiceTerm("P")), Congruent.of({"x": 1}, 0, ChoiceTerm("Q"))],
+        {"P": (2, 3), "Q": (1, 2, 4)},
+    )
+    proof = prove(system, cap=50)
+    worlds = brute_force(system)
+    assert [case["choices"] for case in proof.certificate["cases"]] == [
+        {"P": p, "Q": q} for p in (2, 3) for q in (1, 2, 4)
+    ]
+    assert isinstance(proof, Ambiguity)
+    assert proof.count == len(worlds)
+    assert list(proof.certificate["witnesses"]) == worlds[:2]
+    assert check_certificate(proof.certificate).valid

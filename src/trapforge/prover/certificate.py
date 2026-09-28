@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -240,30 +241,95 @@ def _check_lattice(
     return point, basis, _echelon_pivots(basis, len(case.names))
 
 
-def _box_points(
-    point: list[int], basis: list[list[int]], pivots: list[int], case: _Case, budget: int
-) -> list[tuple[int, ...]]:
-    """Lattice points inside the box, in lexicographic order, at most ``budget`` of them."""
-    n = len(case.names)
-    found: list[tuple[int, ...]] = []
+#: Largest number of pairwise combinations one elimination step may create (see
+#: ``trapforge.linalg.lattice``, whose walk this mirrors without importing it).
+PROJECTION_LIMIT = 4096
 
-    def walk(level: int, x: list[int]) -> Iterator[None]:
-        start = pivots[level - 1] + 1 if level else 0
-        stop = pivots[level] if level < len(pivots) else n
-        if any(not case.lower[j] <= x[j] <= case.upper[j] for j in range(start, stop)):
-            return
-        if level == len(pivots):
-            found.append(tuple(x))
+
+def _bound_levels(
+    point: list[int], basis: list[list[int]], case: _Case
+) -> list[dict[tuple[int, ...], int]] | None:
+    """Box bounds as ``a . t <= c`` grouped by last parameter, with Fourier-Motzkin shadows.
+
+    ``None`` means no lattice point lies in the box.
+    """
+    k = len(basis)
+    levels: list[dict[tuple[int, ...], int]] = [{} for _ in range(k)]
+
+    def add(coefficients: tuple[int, ...], bound: int) -> bool:
+        divisor = math.gcd(*coefficients)
+        if divisor > 1:
+            coefficients = tuple(value // divisor for value in coefficients)
+            bound //= divisor
+        last = next((i for i in reversed(range(k)) if coefficients[i]), None)
+        if last is None:
+            return bound >= 0
+        levels[last][coefficients] = min(bound, levels[last].get(coefficients, bound))
+        return True
+
+    for j in range(len(case.names)):
+        column = tuple(row[j] for row in basis)
+        if not add(column, case.upper[j] - point[j]):
+            return None
+        if not add(tuple(-value for value in column), point[j] - case.lower[j]):
+            return None
+    for i in reversed(range(1, k)):
+        above = [(a, c) for a, c in levels[i].items() if a[i] > 0]
+        below = [(a, c) for a, c in levels[i].items() if a[i] < 0]
+        if len(above) * len(below) > PROJECTION_LIMIT:
+            continue
+        for (a, c), (b, d) in itertools.product(above, below):
+            p, q = a[i], -b[i]
+            if not add(tuple(q * x + p * y for x, y in zip(a, b, strict=True)), q * c + p * d):
+                return None
+    return levels
+
+
+def _box_points(
+    point: list[int], basis: list[list[int]], case: _Case, budget: int
+) -> list[tuple[int, ...]]:
+    """Lattice points inside the box, in lexicographic order, at most ``budget`` of them.
+
+    The walk picks one basis coefficient per echelon row. Every box bound is first projected
+    onto the leading coefficients, so a coefficient only takes values that the later
+    coordinates can still accept, and the work follows the number of points, not the width
+    of the box.
+    """
+    n = len(case.names)
+    rows = [vector[:n] for vector in basis]
+    levels = _bound_levels(point, rows, case)
+    found: list[tuple[int, ...]] = []
+    if levels is None or budget <= 0:
+        return found
+    chosen: list[int] = []
+
+    def walk(level: int) -> Iterator[None]:
+        if level == len(rows):
+            found.append(
+                tuple(
+                    point[j] + sum(t * row[j] for t, row in zip(chosen, rows, strict=True))
+                    for j in range(n)
+                )
+            )
             yield None
             return
-        row, column = basis[level][:n], pivots[level]
-        step = row[column]
-        first = -((x[column] - case.lower[column]) // step)
-        last = (case.upper[column] - x[column]) // step
+        first: int | None = None
+        last: int | None = None
+        for coefficients, bound in levels[level].items():
+            rest = bound - sum(a * t for a, t in zip(coefficients, chosen, strict=False))
+            step = coefficients[level]
+            if step > 0:
+                last = rest // step if last is None else min(last, rest // step)
+            else:
+                first = -(rest // -step) if first is None else max(first, -(rest // -step))
+        if first is None or last is None:  # pragma: no cover - the echelon check prevents it
+            raise _RejectError("a basis row does not bound its own coefficient")
         for t in range(first, last + 1):
-            yield from walk(level + 1, [a + t * b for a, b in zip(x, row, strict=True)])
+            chosen.append(t)
+            yield from walk(level + 1)
+            chosen.pop()
 
-    for _ in itertools.islice(walk(0, point[:n]), budget):
+    for _ in itertools.islice(walk(0), budget):
         pass
     return found
 
@@ -283,12 +349,15 @@ def _verify(data: Mapping[str, Any]) -> CertificateCheck:
     options = [_int_list(choice["options"], "options") for choice in system["choices"]]
     if any(len(set(values)) != len(values) for values in options):
         raise _RejectError("a choice lists an option twice")
-    expected_cases = [
-        dict(zip(choice_names, values, strict=True)) for values in itertools.product(*options)
-    ]
+    # Compare sizes before building anything: a tiny certificate can declare a product of
+    # choices far too large to hold in memory, and the product is walked lazily below.
+    total = math.prod(len(values) for values in options)
     cases = data["cases"]
-    if not isinstance(cases, list) or len(cases) != len(expected_cases):
-        raise _RejectError(f"the certificate must cover all {len(expected_cases)} cases")
+    if not isinstance(cases, list) or len(cases) != total:
+        raise _RejectError(f"the certificate must cover all {total} cases")
+    expected_cases = (
+        dict(zip(choice_names, values, strict=True)) for values in itertools.product(*options)
+    )
     found: list[dict[str, int]] = []
     for index, (choices, evidence) in enumerate(zip(expected_cases, cases, strict=True)):
         if evidence["choices"] != choices:
@@ -299,9 +368,9 @@ def _verify(data: Mapping[str, Any]) -> CertificateCheck:
             continue
         if evidence["evidence"] != "lattice":
             raise _RejectError(f"unknown evidence kind {evidence['evidence']!r}")
-        point, basis, pivots = _check_lattice(evidence, case)
+        point, basis, _ = _check_lattice(evidence, case)
         budget = cap + 1 - len(found)
-        for x in _box_points(point, basis, pivots, case, budget):
+        for x in _box_points(point, basis, case, budget):
             found.append({**choices, **dict(zip(case.names, x, strict=True))})
     exact = len(found) <= cap
     count = min(len(found), cap)
@@ -335,3 +404,5 @@ def check_certificate(certificate: Mapping[str, Any] | str) -> CertificateCheck:
         return CertificateCheck(False, str(error))
     except (KeyError, TypeError, ValueError, IndexError, AttributeError) as error:
         return CertificateCheck(False, f"malformed certificate: {error!r}")
+    except RecursionError:
+        return CertificateCheck(False, "malformed certificate: nested too deeply to parse")

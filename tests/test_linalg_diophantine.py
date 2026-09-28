@@ -5,6 +5,8 @@ dimension and rank for the rational picture, and planted solutions with 30-digit
 """
 
 import itertools
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import replace
 
 import pytest
@@ -22,6 +24,7 @@ from trapforge.linalg import (
     kernel_basis,
     solve_diophantine,
 )
+from trapforge.linalg import lattice as lattice_module
 
 small_dims = st.integers(1, 3)
 BOX = 5
@@ -140,6 +143,49 @@ def test_points_in_box_stays_inside_a_thin_lattice_in_a_huge_box() -> None:
     lattice = AffineLattice.of((0, 0), Matrix.of([[100_000, 1]]))
     found = list(lattice.points_in_box((-500_000, -(10**6)), (500_000, 10**6)))
     assert found == [(100_000 * t, t) for t in range(-5, 6)]
+
+
+def test_points_in_box_cost_follows_the_solutions_not_the_box_width(
+    time_limit: Callable[[float], AbstractContextManager[None]],
+) -> None:
+    # x + y = 10 in a box of width 10**12 has 11 points; walking the pivot interval of x
+    # would take 10**12 steps. Three digits summing to 13 would take (10**9)**2.
+    with time_limit(5):
+        line = AffineLattice.of((10, 0), Matrix.of([[1, -1]]))
+        assert list(line.points_in_box((0, 0), (10**12, 10**12))) == [
+            (x, 10 - x) for x in range(11)
+        ]
+        plane = AffineLattice.of((13, 0, 0), Matrix.of([[1, 0, -1], [0, 1, -1]]))
+        found = list(plane.points_in_box((0, 0, 0), (10**9,) * 3))
+        assert found == [(a, b, 13 - a - b) for a in range(14) for b in range(14 - a)]
+        # One equation with 10**20-scale coefficients over a 10**30 box: a single point.
+        a, b = 10**20, 10**20 + 1
+        hidden = (123_456_789 * 10**9, 987_654_321)
+        solutions = solve_diophantine(Matrix.of([[a, b]]), (a * hidden[0] + b * hidden[1],))
+        assert isinstance(solutions, AffineLattice)
+        assert list(solutions.points_in_box((0, 0), (10**30, 10**30))) == [hidden]
+
+
+@given(
+    dense_matrices(st.integers(1, 3), st.integers(2, 3), st.integers(-4, 4)),
+    st.data(),
+)
+def test_points_in_box_stay_exact_when_the_projection_is_skipped(
+    G: Matrix, data: st.DataObject
+) -> None:
+    # A zero limit disables every elimination step, which may only weaken the bounds.
+    lattice = AffineLattice.of(data.draw(vectors(G.ncols, bound=8)), G)
+    n = lattice.ambient_dimension
+    lower = data.draw(vectors(n, bound=BOX))
+    upper = tuple(lo + data.draw(st.integers(-1, 2 * BOX)) for lo in lower)
+    projected = list(lattice.points_in_box(lower, upper))
+    original = lattice_module.PROJECTION_LIMIT
+    lattice_module.PROJECTION_LIMIT = 0
+    try:
+        unprojected = list(lattice.points_in_box(lower, upper))
+    finally:
+        lattice_module.PROJECTION_LIMIT = original
+    assert unprojected == projected
 
 
 def test_points_in_box_checks_its_bounds() -> None:

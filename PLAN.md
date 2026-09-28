@@ -194,3 +194,15 @@ Goal: Add `trapforge report`, which runs N seeds per family and difficulty and r
   instance, runs the reference and the baseline, prints the digest, and exits 1 when any of
   the three checks fails; `--out` writes the bundle). Slice 7 adds `export` and `verify` on
   top of these instead of new generate commands.
+- 2026-09-29 (review fixes): Box enumeration used to walk every value of each pivot
+  parameter and only then test the later coordinates, so `x + y = 10` over a box of width
+  10**9 took minutes and three digits summing to 13 over 0..10**5 took hours. Both
+  `AffineLattice.points_in_box` and the standalone checker now project every box bound onto
+  the leading parameters with Fourier-Motzkin elimination (integer arithmetic, each
+  inequality divided by its gcd with the bound floored, duplicates merged) before the walk,
+  so each parameter only takes values the later coordinates can still accept. An elimination
+  step that would create more than 4096 combinations is skipped, which only weakens bounds.
+  The checker compares the declared case count with `len(cases)` before walking the choice
+  product lazily, `check_certificate` reports too-deep JSON as malformed, and the CLI maps
+  non-UTF-8 and too-deep input files to exit 2 (exit 1 stays reserved for failed checks).
+  The Hypothesis systems now draw up to two choices and choice-dependent lower bounds.

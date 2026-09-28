@@ -75,8 +75,12 @@ def _load_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except OSError as error:
         _fail(f"cannot read {path}: {error.strerror or error}")
+    except UnicodeDecodeError as error:
+        _fail(f"{path} is not UTF-8 text: {error.reason} at byte {error.start}")
     except json.JSONDecodeError as error:
         _fail(f"{path} is not valid JSON: {error}")
+    except RecursionError:
+        _fail(f"{path} is nested too deeply to parse")
 
 
 def _plural(count: int, noun: str) -> str:
