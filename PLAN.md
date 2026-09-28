@@ -11,7 +11,8 @@ byte-exact pytest graders. This file is the working plan; decisions are logged a
 src/trapforge/
   modular.py          extended gcd, modular inverse, CRT (non-coprime), linear congruences
   linalg/             exact integer matrices: HNF, SNF, kernel bases, Diophantine systems
-  prover/             constraint model, exact solver, uniqueness certificate / counterexample
+  prover/             model.py, solver.py (verdicts + certificates), certificate.py
+                      (standalone checker), gating.py (uniqueness gate)
   families/           plugin API + registry + the three original task families
   bundle/             exporter, digest-pinned Dockerfile template, byte-exact grader template
   verify.py           reference-passes / baseline-fails check, locally and in Docker
@@ -38,7 +39,7 @@ Goal: Implement `trapforge.modular` in pure Python: extended gcd, modular invers
 
 Goal: Implement `trapforge.linalg` over Python ints: an immutable integer matrix helper layer (multiply, transpose, identity, fraction-free determinant, rank), Hermite normal form with its unimodular transform, Smith normal form with both unimodular transforms, integer kernel bases, and a linear Diophantine system solver returning a particular solution plus a kernel lattice basis (or a proof of infeasibility), with bounded enumeration of lattice points in a box. Property-test with hypothesis: U*A = H, U*A*V = S, divisibility chain of the SNF diagonal, |det U| = 1, and agreement with sympy's hermite_normal_form / smith_normal_form.
 
-### Slice 3: Uniqueness prover and gate [~] in progress (constraint model done; solver, certificates and gate open)
+### Slice 3: Uniqueness prover and gate [x] done
 
 Goal: Build `trapforge.prover`: a constraint model over bounded integer unknowns (linear equalities over Z, linear congruences mod m, box bounds, and a finite case split for discrete unknowns such as periods), an exact solver built on slices 1-2 that reduces congruences to Diophantine form and enumerates the remaining lattice inside the box, and a result type that is either a UniqueProof (the single parameterization plus a JSON certificate that can be re-checked independently) or an Ambiguity carrying a concrete counterexample pair and the exact or capped size of the ambiguity space. Provide a gate helper that rejects or extends a generated sample until the proof holds, and test it on hand-built unique and deliberately ambiguous systems.
 
@@ -122,3 +123,39 @@ Goal: Add `trapforge report`, which runs N seeds per family and difficulty and r
 - 2026-09-29 (deliverable pass): An unfinished standalone certificate checker left by an
   interrupted session was parked in a local git stash instead of being committed, because no
   code produces certificates yet; the solver work in slice 3 should start from it.
+- 2026-09-29 (slice 3): The parked checker became `prover/certificate.py` (commit 81a1986).
+  Its unused `_Case.width` property summed over an empty tuple and read the width off the
+  first matrix row; it is now a field computed while the case is rebuilt, and every width
+  check uses it. The checker also now rejects clashing unknown/choice names, repeated options,
+  a non-bool `exact` and witnesses that are not the first solutions. The stash entry still
+  exists locally but is fully superseded and should not be applied.
+- 2026-09-29 (slice 3): A case becomes one system `M z = r` over `z = (unknowns, slacks)` with
+  one slack per congruence (`a . x - m*s = b`). A kernel vector with zero unknown part must
+  have zero slacks too (`m >= 1`), so every Hermite pivot of the kernel lies among the
+  unknowns: truncating the lattice to the unknowns keeps it canonical and one-to-one, and
+  `AffineLattice.points_in_box` enumerates it without bounding the slacks.
+- 2026-09-29 (slice 3): Lattice evidence is designed to be cheaper to check than to find: an
+  integer right inverse `W` of the kernel basis (first `k` columns of `V` times `U` from the
+  basis's Smith form) proves saturation, and a nonsingular minor at the Hermite pivots of
+  `M^T` (rows) and `M` (columns) proves the rank. The checker multiplies, takes one Bareiss
+  determinant and walks the box; it never computes a normal form and imports only the
+  standard library (a test parses its imports).
+- 2026-09-29 (slice 3): `prove` has three verdicts, not two: `Infeasible` exists because a
+  generated sample with no solution is a generator bug worth a certificate of its own.
+  Counting stops at `cap + 1` (default 1000) across all cases; `count == cap` with
+  `exact == False` means "more than cap". The two witnesses of an ambiguity are the first two
+  worlds in case order, then lexicographic order of the unknowns, so they are deterministic.
+- 2026-09-29 (slice 3): Certificates are written by one canonical writer (sorted keys, one
+  entry per line, lists of plain values kept on one line so matrices read as matrices, final
+  newline); `examples/ledger-anchors-unique.cert.json` is a golden file a test regenerates
+  byte for byte.
+- 2026-09-29 (slice 3): `gate` has prefix semantics: it appends candidates in stream order and
+  stops at the shortest prefix that is unique, keeping candidates that did not cut anything,
+  because a family reveals records in order and must map the result back to "the first k
+  records". A planted world that breaks the sample, or a sample that turns infeasible, raises
+  `GateError`. The module is `gating.py` because a `prover.gate` submodule would be shadowed
+  by the `gate` function the package exports.
+- 2026-09-29 (slice 3): The CLI gained `prove` and `check` over a constraint-system file now,
+  with exit code 1 for a failed check (`check` on a bad certificate, `prove
+  --require-unique` on a non-unique sample); the slice 7 `prove` for generated instances
+  should build on this command rather than add another.
