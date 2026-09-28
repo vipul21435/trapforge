@@ -1,0 +1,40 @@
+"""Reference solver for the affine-ledger task (easy, seed 0).
+
+Standalone: it needs only Python 3.12. The pure-Python modules it uses are vendored in
+vendor/ next to this file and put first on sys.path, so nothing has to be installed.
+
+Usage: python solve.py [TASK_DIR]   (TASK_DIR defaults to the current directory)
+Reads every file under TASK_DIR/data/ and writes TASK_DIR/output/balances.csv.
+"""
+
+import importlib
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))
+
+FAMILY_MODULE = "trapforge.families.ledger"
+FAMILY_CLASS = "AffineLedger"
+METHOD = "solve"
+OUTPUT = "balances.csv"
+
+
+def main(argv: list[str]) -> int:
+    task = Path(argv[1]) if len(argv) > 1 else Path.cwd()
+    data = task / "data"
+    files = {
+        path.relative_to(data).as_posix(): path.read_bytes()
+        for path in sorted(data.rglob("*"))
+        if path.is_file()
+    }
+    family = getattr(importlib.import_module(FAMILY_MODULE), FAMILY_CLASS)()
+    answer = getattr(family, METHOD)(files)
+    target = task / "output" / OUTPUT
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(answer)
+    print(f"wrote {len(answer)} bytes to output/{OUTPUT}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

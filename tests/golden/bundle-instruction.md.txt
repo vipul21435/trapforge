@@ -1,0 +1,30 @@
+# Reconcile a scrambled ledger
+
+An export replaced every account number `x` (with `0 <= x < 40`) by the scrambled
+number `(a*x + b) mod 40`. The integers `a` and `b` are unknown; `a` is coprime to
+40, so no two accounts share a scrambled number. The modulus is also in
+`data/params.json`.
+
+- `data/anchors.csv` lists accounts whose scrambled number was confirmed by hand
+  (`account,scrambled`).
+- `data/ledger.csv` lists transactions (`txn,account,amount`) by *scrambled* account;
+  amounts are signed integers in cents.
+- `data/queries.csv` lists true account numbers (`account`).
+
+Write `balances.csv` with the header `account,balance` and one row per queried account: its
+true account number and the sum of the amounts of its transactions (0 if it has none),
+sorted by account, comma separated, `\n` line endings, final newline. The file is compared
+byte for byte.
+
+Some rows of the expected output:
+
+```
+account,balance
+28,126016
+32,12995
+```
+
+## Files
+
+The input files are under `data/`. Write your answer to `output/balances.csv`; it is
+graded byte for byte.

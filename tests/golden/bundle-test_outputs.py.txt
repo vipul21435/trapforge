@@ -1,0 +1,46 @@
+"""Byte-exact grader for the affine-ledger task (easy, seed 0).
+
+The expected output is embedded only as its SHA-256 digest and its size, so the bundle does
+not reveal it. Runs under pytest (pytest tests/test_outputs.py) or on its own
+(python tests/test_outputs.py, exit code 0 when every check passes), with the standard
+library only.
+"""
+
+import hashlib
+import sys
+from pathlib import Path
+
+TASK_DIR = Path(__file__).resolve().parent.parent
+OUTPUT = TASK_DIR / "output" / "balances.csv"
+EXPECTED_SHA256 = "9ff0e5b50eb739937eac60d33c7815d726806d22bb425d201c103f2734d7d396"
+EXPECTED_SIZE = 71
+
+
+def test_output_file_exists() -> None:
+    assert OUTPUT.is_file(), f"output/{OUTPUT.name} was not written"
+
+
+def test_output_matches_byte_for_byte() -> None:
+    data = OUTPUT.read_bytes()
+    assert len(data) == EXPECTED_SIZE, f"expected {EXPECTED_SIZE} bytes, got {len(data)}"
+    actual = hashlib.sha256(data).hexdigest()
+    assert actual == EXPECTED_SHA256, f"sha256 {actual} != expected {EXPECTED_SHA256}"
+
+
+def main() -> int:
+    failed = 0
+    for name, check in sorted(globals().items()):
+        if not name.startswith("test_"):
+            continue
+        try:
+            check()
+        except (AssertionError, OSError) as error:
+            failed += 1
+            print(f"FAIL {name}: {error}")
+        else:
+            print(f"PASS {name}")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

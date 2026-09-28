@@ -1,0 +1,15 @@
+# Task image for affine-ledger (easy, seed 0).
+# The base image is pinned by digest, so the environment cannot drift. Only the instruction
+# and the corpus are baked in; solution/, baseline/ and tests/ are mounted at grading time.
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+LABEL project=trapforge \
+      trapforge.family="affine-ledger" \
+      trapforge.difficulty="easy" \
+      trapforge.seed="0"
+RUN useradd --create-home --uid 10001 solver \
+    && mkdir -p /task/output \
+    && chown solver /task/output
+WORKDIR /task
+COPY instruction.md ./
+COPY data/ data/
+USER solver
