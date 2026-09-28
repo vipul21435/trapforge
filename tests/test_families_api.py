@@ -84,7 +84,7 @@ def _replace(instance: TaskInstance, **changes: object) -> TaskInstance:
         ({"sample": None}, "sample must be bytes"),
         ({"system": {}}, "must be a ConstraintSystem"),
         ({"hidden": {"k": 11}}, "planted world violates bounds of k"),
-        ({"instruction": "café"}, "ASCII"),
+        ({"instruction": "caf\u00e9"}, "ASCII"),
         ({"extras": {"size": "big"}}, "extras must map names to ints"),
     ],
 )
