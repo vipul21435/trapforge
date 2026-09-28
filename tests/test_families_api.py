@@ -84,14 +84,25 @@ def _replace(instance: TaskInstance, **changes: object) -> TaskInstance:
         ({"sample": None}, "sample must be bytes"),
         ({"system": {}}, "must be a ConstraintSystem"),
         ({"hidden": {"k": 11}}, "planted world violates bounds of k"),
-        ({"instruction": "caf\u00e9"}, "ASCII"),
+        ({"hidden": {}}, r"hidden: an assignment must give exactly \['k'\]"),
+        ({"hidden": {"k": 1, "j": 2}}, "hidden: an assignment must give exactly"),
+        ({"hidden": {"k": "1"}}, "hidden: assignment values must be ints"),
+        ({"hidden": [1]}, "hidden must map unknown names to ints"),
+        ({"instruction": "caf\u00e9"}, "instruction: text must be ASCII"),
+        ({"instruction": None}, "instruction must be a str"),
         ({"extras": {"size": "big"}}, "extras must map names to ints"),
+        ({"extras": {1: 2}}, "extras must map names to ints"),
+        ({"extras": {1: 2, "a": 3}}, "extras must map names to ints"),
+        ({"extras": [1]}, "extras must map names to ints"),
     ],
 )
 def test_instance_validation(changes: dict[str, object], message: str) -> None:
+    # Every malformed instance raises FamilyError itself, not a sibling ValueError subclass
+    # (CanonicalError, ModelError) or a TypeError, so callers can catch one type.
     instance = ToyShift().generate(0, Difficulty.EASY)
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(FamilyError, match=message) as caught:
         _replace(instance, **changes)
+    assert type(caught.value) is FamilyError
 
 
 def test_instance_rejects_a_planted_world_that_breaks_the_corpus() -> None:

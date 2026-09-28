@@ -1,12 +1,14 @@
 """The families and generate commands."""
 
+import dataclasses
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from trapforge.cli import app
-from trapforge.families import REGISTRY, AffineLedger, Difficulty
+from trapforge.families import REGISTRY, AffineLedger, Difficulty, ledger
+from trapforge.families.base import TaskInstance
 
 runner = CliRunner()
 
@@ -77,6 +79,28 @@ def test_generate_reports_an_unwritable_output(tmp_path: Path) -> None:
     code, output = run("generate", "affine-ledger", "--out", str(blocker))
     assert code == 2
     assert "cannot write under" in output
+
+
+def test_generate_reports_a_family_that_breaks_the_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Regression: a non-ASCII instruction used to escape as CanonicalError (exit 1).
+    monkeypatch.setattr(ledger, "_instruction", lambda modulus, sample: "caf\u00e9")
+    code, output = run("generate", "affine-ledger")
+    assert code == 2
+    assert "instruction: text must be ASCII" in output
+
+
+def test_generate_reports_unserializable_extras(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Regression: extras with a non-str key used to escape as TypeError (exit 1).
+    original = AffineLedger.generate
+
+    def broken(self: AffineLedger, seed: int, difficulty: Difficulty) -> TaskInstance:
+        instance = original(self, seed, difficulty)
+        return dataclasses.replace(instance, extras={**instance.extras, 1: 2})  # type: ignore[dict-item]
+
+    monkeypatch.setattr(AffineLedger, "generate", broken)
+    code, output = run("generate", "affine-ledger")
+    assert code == 2
+    assert "extras must map names to ints" in output
 
 
 def test_generate_fails_when_the_baseline_is_not_trapped(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -26,8 +26,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
-from trapforge.canonical import json_bytes, text_bytes, tree_digest
-from trapforge.prover import ConstraintSystem
+from trapforge.canonical import CanonicalError, json_bytes, text_bytes, tree_digest
+from trapforge.prover import ConstraintSystem, ModelError
 
 __all__ = [
     "Difficulty",
@@ -83,7 +83,10 @@ def _frozen_files(files: Mapping[str, bytes], what: str) -> Mapping[str, bytes]:
     for name, content in files.items():
         if not isinstance(content, bytes):
             raise FamilyError(f"{what}[{name!r}] must be bytes")
-    tree_digest(files)  # validates every path
+    try:
+        tree_digest(files)  # validates every path
+    except CanonicalError as error:
+        raise FamilyError(f"{what}: {error}") from error
     return MappingProxyType(dict(sorted(files.items())))
 
 
@@ -111,6 +114,8 @@ class TaskInstance:
     extras: Mapping[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # Every way an instance can break the API surfaces as FamilyError, whichever layer
+        # (canonical writers, constraint model) noticed it first.
         if not isinstance(self.difficulty, Difficulty):
             raise FamilyError(f"difficulty must be a Difficulty, got {self.difficulty!r}")
         family_rng(self.family, self.seed, self.difficulty)  # validates the seed
@@ -120,14 +125,30 @@ class TaskInstance:
             raise FamilyError("sample must be bytes")
         if not isinstance(self.system, ConstraintSystem):
             raise FamilyError("system must be a ConstraintSystem")
-        broken = self.system.violations(self.hidden)
+        if not isinstance(self.hidden, Mapping):
+            raise FamilyError("hidden must map unknown names to ints")
+        try:
+            broken = self.system.violations(self.hidden)
+        except ModelError as error:
+            raise FamilyError(f"hidden: {error}") from error
         if broken:
             raise FamilyError(f"the planted world violates {', '.join(broken)}")
-        text_bytes(self.instruction)  # validates ASCII
+        if not isinstance(self.instruction, str):
+            raise FamilyError("instruction must be a str")
+        try:
+            text_bytes(self.instruction)
+        except CanonicalError as error:
+            raise FamilyError(f"instruction: {error}") from error
         object.__setattr__(self, "hidden", MappingProxyType(dict(self.hidden)))
-        if not all(type(value) is int for value in self.extras.values()):
+        if not isinstance(self.extras, Mapping) or not all(
+            isinstance(name, str) and type(value) is int for name, value in self.extras.items()
+        ):
             raise FamilyError("extras must map names to ints")
         object.__setattr__(self, "extras", MappingProxyType(dict(sorted(self.extras.items()))))
+        try:
+            self.bundle()  # the metadata must serialize canonically, too
+        except CanonicalError as error:
+            raise FamilyError(f"the instance cannot be written canonically: {error}") from error
 
     def bundle(self) -> dict[str, bytes]:
         """Every byte the instance consists of, as canonical files keyed by path.
