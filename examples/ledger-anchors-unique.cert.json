@@ -1,0 +1,83 @@
+{
+  "cap": 1000,
+  "cases": [
+    {
+      "basis": [
+        [12, 0, 1, 3, 2],
+        [0, 12, 1, 1, 1]
+      ],
+      "choices": {},
+      "evidence": "lattice",
+      "minor": {
+        "columns": [0, 1, 2],
+        "rows": [0, 1, 2]
+      },
+      "point": [5, 7, 1, 1, 1],
+      "right_inverse": [
+        [0, 0],
+        [0, 0],
+        [-1, 2],
+        [0, 0],
+        [1, -1]
+      ]
+    }
+  ],
+  "count": 1,
+  "exact": true,
+  "format": "trapforge-uniqueness-certificate",
+  "system": {
+    "choices": [],
+    "constraints": [
+      {
+        "kind": "congruence",
+        "label": "anchor x=1",
+        "modulus": 12,
+        "rhs": 0,
+        "terms": [
+          ["a", 1],
+          ["b", 1]
+        ]
+      },
+      {
+        "kind": "congruence",
+        "label": "anchor x=3",
+        "modulus": 12,
+        "rhs": 10,
+        "terms": [
+          ["a", 3],
+          ["b", 1]
+        ]
+      },
+      {
+        "kind": "congruence",
+        "label": "anchor x=2",
+        "modulus": 12,
+        "rhs": 5,
+        "terms": [
+          ["a", 2],
+          ["b", 1]
+        ]
+      }
+    ],
+    "unknowns": [
+      {
+        "lower": 1,
+        "name": "a",
+        "upper": 11
+      },
+      {
+        "lower": 0,
+        "name": "b",
+        "upper": 11
+      }
+    ]
+  },
+  "verdict": "unique",
+  "version": 1,
+  "witnesses": [
+    {
+      "a": 5,
+      "b": 7
+    }
+  ]
+}

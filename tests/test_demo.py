@@ -25,9 +25,11 @@ def test_demo_script_runs_every_step() -> None:
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("\n== ") == 9
+    assert result.stdout.count("\n== ") == 13
     assert "exactly one point in the box (unique)" in result.stdout
-    assert result.stdout.count("certificate re-checked: True") == 2
+    assert result.stdout.count("certificate re-checked: True") == 5
+    assert "unique: a=5, b=7" in result.stdout
+    assert "\nverified: unique, 1 solution\n" in result.stdout
     assert result.stdout.rstrip().endswith(
         "demo finished: every step above ran on the bundled examples/ inputs"
     )

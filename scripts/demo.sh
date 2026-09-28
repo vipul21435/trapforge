@@ -33,5 +33,13 @@ run "the composite modulus admits a second world that fits every anchor" \
     system examples/ledger-anchors.json --check a=11 --check b=1
 run "a clock with an unknown period is a finite case split" \
     system examples/wrapping-clock.json --check P=18 --check T=41 --check w=2
+run "the prover finds the counterexample pair behind the ledger anchors" \
+    prove examples/ledger-anchors.json
+run "a third anchor pins the affine map down, with a certificate" \
+    prove examples/ledger-anchors-unique.json
+run "the case split over the period leaves six worlds" \
+    prove examples/wrapping-clock.json
+run "re-check the bundled certificate without running the solver" \
+    check examples/ledger-anchors-unique.cert.json
 
 printf '\ndemo finished: every step above ran on the bundled examples/ inputs\n'

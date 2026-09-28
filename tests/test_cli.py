@@ -217,3 +217,90 @@ def test_system_rejects_a_malformed_system(tmp_path: Path) -> None:
     code, out = run("system", write_json(tmp_path, {"unknowns": []}))
     assert code == 2
     assert "malformed constraint system" in out
+
+
+# -- prove and check ------------------------------------------------------------------------
+
+
+def test_prove_finds_the_counterexample_pair_of_the_ledger() -> None:
+    code, out = run("prove", str(EXAMPLES / "ledger-anchors.json"))
+    assert code == 0
+    assert out.splitlines() == [
+        "system: 2 unknowns, 2 constraints, 1 case",
+        "ambiguous: exactly 2 worlds fit, for example a=5, b=7 and a=11, b=1 (they differ in a, b)",
+        "certificate re-checked: True (verified: ambiguous, 2 solutions)",
+    ]
+
+
+def test_prove_counts_the_worlds_of_a_case_split() -> None:
+    code, out = run("prove", str(EXAMPLES / "wrapping-clock.json"))
+    assert code == 0
+    assert "system: 2 unknowns, 2 constraints, 2 cases" in out
+    assert "ambiguous: exactly 6 worlds fit" in out
+
+
+def test_prove_writes_the_bundled_certificate_byte_for_byte(tmp_path: Path) -> None:
+    target = tmp_path / "ledger.cert.json"
+    code, out = run(
+        "prove", str(EXAMPLES / "ledger-anchors-unique.json"), "--certificate", str(target)
+    )
+    assert code == 0
+    assert out.splitlines() == [
+        "system: 2 unknowns, 3 constraints, 1 case",
+        "unique: a=5, b=7",
+        "certificate re-checked: True (verified: unique, 1 solution)",
+        f"certificate written to {target}",
+    ]
+    assert target.read_bytes() == (EXAMPLES / "ledger-anchors-unique.cert.json").read_bytes()
+
+
+def test_prove_require_unique_sets_the_exit_code() -> None:
+    assert run("prove", str(EXAMPLES / "ledger-anchors.json"), "--require-unique")[0] == 1
+    unique = str(EXAMPLES / "ledger-anchors-unique.json")
+    assert run("prove", unique, "--require-unique")[0] == 0
+
+
+def test_prove_caps_the_count_and_reports_infeasible_samples(tmp_path: Path) -> None:
+    wide = {"choices": [], "unknowns": [{"name": "x", "lower": 0, "upper": 99}], "constraints": []}
+    code, out = run("prove", write_json(tmp_path, wide), "--cap", "3")
+    assert code == 0
+    assert "ambiguous: more than 3 worlds fit, for example x=0 and x=1" in out
+    assert "certificate re-checked: True (verified: ambiguous, more than 3)" in out
+    wide["constraints"] = [
+        {"kind": "equation", "label": "", "terms": [["x", 2]], "rhs": 3},
+    ]
+    code, out = run("prove", write_json(tmp_path, wide))
+    assert code == 0
+    assert "infeasible: no world fits every constraint and bound" in out
+    assert run("prove", write_json(tmp_path, wide), "--cap", "1")[0] == 2
+
+
+def test_prove_rejects_bad_systems_and_unwritable_targets(tmp_path: Path) -> None:
+    code, out = run("prove", write_json(tmp_path, {"unknowns": []}))
+    assert code == 2
+    assert "malformed constraint system" in out
+    target = tmp_path / "missing" / "cert.json"
+    code, out = run("prove", str(EXAMPLES / "ledger-anchors.json"), "--certificate", str(target))
+    assert code == 2
+    assert f"cannot write {target}" in out
+
+
+def test_check_verifies_the_bundled_certificate() -> None:
+    code, out = run("check", str(EXAMPLES / "ledger-anchors-unique.cert.json"))
+    assert code == 0
+    assert out == "verified: unique, 1 solution\n"
+
+
+def test_check_rejects_a_tampered_certificate(tmp_path: Path) -> None:
+    data = json.loads((EXAMPLES / "ledger-anchors-unique.cert.json").read_text())
+    data["witnesses"] = [{"a": 11, "b": 1}]
+    code, out = run("check", write_json(tmp_path, data))
+    assert code == 1
+    assert out == "invalid: the witnesses are not the first solutions the evidence gives\n"
+    data["cases"][0]["basis"][0][0] = 24
+    code, out = run("check", write_json(tmp_path, data))
+    assert code == 1
+    assert out.startswith("invalid: a basis row is not a solution")
+    broken = tmp_path / "broken.json"
+    broken.write_text("{", encoding="utf-8")
+    assert run("check", str(broken))[0] == 2

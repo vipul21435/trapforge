@@ -1,12 +1,14 @@
 """Command-line entry point for TrapForge.
 
 The commands are thin wrappers over the library: ``crt`` over :mod:`trapforge.modular`,
-``solve`` over :mod:`trapforge.linalg` and ``system`` over :mod:`trapforge.prover.model`.
-Every "no solution" answer is printed together with its certificate and the result of
-re-checking that certificate, so the CLI never asks to be trusted.
+``solve`` over :mod:`trapforge.linalg`, ``system`` over :mod:`trapforge.prover.model`, and
+``prove`` and ``check`` over the prover's solver and its standalone certificate checker.
+Every "no solution" answer and every proof is printed together with the result of
+re-checking its certificate, so the CLI never asks to be trusted.
 
-Exit codes: 0 when the input was valid (whether or not it has a solution), 2 for input that
-cannot be read or parsed.
+Exit codes: 0 when the input was valid (whether or not it has a solution), 1 when a check
+fails (``check`` on a certificate that does not hold, ``prove --require-unique`` on a sample
+that is not unique), 2 for input that cannot be read or parsed.
 """
 
 from __future__ import annotations
@@ -22,7 +24,14 @@ import typer
 from trapforge import __version__
 from trapforge.linalg import AffineLattice, LinalgError, Matrix, solve_diophantine
 from trapforge.modular import Congruence, ModularError, crt
-from trapforge.prover import ConstraintSystem, ModelError
+from trapforge.prover import (
+    DEFAULT_CAP,
+    ConstraintSystem,
+    ModelError,
+    UniqueProof,
+    check_certificate,
+    prove,
+)
 
 app = typer.Typer(
     name="trapforge",
@@ -178,6 +187,22 @@ def _parse_assignment(pairs: list[str]) -> dict[str, int]:
     return assignment
 
 
+def _load_system(path: Path) -> ConstraintSystem:
+    try:
+        return ConstraintSystem.from_json_dict(_load_json(path))
+    except ModelError as error:
+        _fail(str(error))
+
+
+def _summary(loaded: ConstraintSystem) -> str:
+    counts = [
+        _plural(len(loaded.unknowns), "unknown"),
+        _plural(len(loaded.constraints), "constraint"),
+        _plural(loaded.case_count, "case"),
+    ]
+    return ", ".join(counts)
+
+
 @app.command()
 def system(
     path: Annotated[Path, typer.Argument(help="Constraint system JSON (the prover's format).")],
@@ -187,17 +212,9 @@ def system(
     ] = None,
 ) -> None:
     """Validate and print a constraint system; optionally test a candidate assignment."""
-    try:
-        loaded = ConstraintSystem.from_json_dict(_load_json(path))
-    except ModelError as error:
-        _fail(str(error))
+    loaded = _load_system(path)
     typer.echo(str(loaded))
-    counts = [
-        _plural(len(loaded.unknowns), "unknown"),
-        _plural(len(loaded.constraints), "constraint"),
-        _plural(loaded.case_count, "case"),
-    ]
-    typer.echo(", ".join(counts))
+    typer.echo(_summary(loaded))
     if not check:
         return
     assignment = _parse_assignment(check)
@@ -210,6 +227,57 @@ def system(
         typer.echo(f"{shown} violates: {', '.join(broken)}")
     else:
         typer.echo(f"{shown} satisfies every constraint")
+
+
+@app.command("prove")
+def prove_command(
+    path: Annotated[Path, typer.Argument(help="Constraint system JSON (the prover's format).")],
+    cap: Annotated[
+        int, typer.Option(min=2, help="Count at most this many worlds before giving up.")
+    ] = DEFAULT_CAP,
+    certificate: Annotated[
+        Path | None, typer.Option(help="Write the JSON certificate to this file.")
+    ] = None,
+    require_unique: Annotated[
+        bool, typer.Option("--require-unique", help="Exit with code 1 unless exactly one fits.")
+    ] = False,
+) -> None:
+    """Decide how many hidden worlds fit a constraint system, with a re-checked certificate.
+
+    Prints the verdict (unique, ambiguous with a counterexample pair and the size of the
+    ambiguity space, or infeasible) and the result of re-checking its certificate with the
+    standalone checker.
+    """
+    loaded = _load_system(path)
+    typer.echo(f"system: {_summary(loaded)}")
+    proof = prove(loaded, cap=cap)
+    typer.echo(str(proof))
+    check = proof.check()
+    typer.echo(f"certificate re-checked: {check.valid} ({check.reason})")
+    if certificate is not None:
+        try:
+            with certificate.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(proof.certificate_json())
+        except OSError as error:
+            _fail(f"cannot write {certificate}: {error.strerror or error}")
+        typer.echo(f"certificate written to {certificate}")
+    if require_unique and not isinstance(proof, UniqueProof):
+        raise typer.Exit(code=1)
+
+
+@app.command("check")
+def check_command(
+    path: Annotated[Path, typer.Argument(help="Certificate JSON written by prove.")],
+) -> None:
+    """Re-check a uniqueness certificate from scratch, without running the solver.
+
+    Exits with code 1 when the certificate does not hold.
+    """
+    result = check_certificate(_load_json(path))
+    if not result.valid:
+        typer.echo(f"invalid: {result.reason}")
+        raise typer.Exit(code=1)
+    typer.echo(result.reason)
 
 
 if __name__ == "__main__":  # pragma: no cover
