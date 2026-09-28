@@ -1,0 +1,11 @@
+{
+  "choices": [],
+  "unknowns": [
+    {"name": "a", "lower": 1, "upper": 11},
+    {"name": "b", "lower": 0, "upper": 11}
+  ],
+  "constraints": [
+    {"kind": "congruence", "label": "anchor x=1", "terms": [["a", 1], ["b", 1]], "rhs": 0, "modulus": 12},
+    {"kind": "congruence", "label": "anchor x=3", "terms": [["a", 3], ["b", 1]], "rhs": 10, "modulus": 12}
+  ]
+}

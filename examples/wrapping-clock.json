@@ -1,0 +1,11 @@
+{
+  "choices": [{"name": "P", "options": [12, 18]}],
+  "unknowns": [
+    {"name": "T", "lower": 0, "upper": 100},
+    {"name": "w", "lower": 0, "upper": 8}
+  ],
+  "constraints": [
+    {"kind": "equation", "label": "beacon", "terms": [["T", 1], ["w", {"choice": "P", "scale": -1, "offset": 0}]], "rhs": 5},
+    {"kind": "congruence", "label": "sync", "terms": [["T", 1]], "rhs": 5, "modulus": 36}
+  ]
+}
