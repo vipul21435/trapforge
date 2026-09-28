@@ -7,9 +7,9 @@ import pytest
 
 from trapforge import modular
 from trapforge.linalg import diophantine, hermite, lattice, matrix, smith
-from trapforge.prover import model
+from trapforge.prover import model, solver
 
-MODULES = [modular, matrix, hermite, smith, lattice, diophantine, model]
+MODULES = [modular, matrix, hermite, smith, lattice, diophantine, model, solver]
 
 
 @pytest.mark.parametrize("module", MODULES, ids=lambda m: m.__name__)
