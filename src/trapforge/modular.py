@@ -30,6 +30,7 @@ __all__ = [
     "InvalidModulusError",
     "LinearCongruence",
     "ModularError",
+    "NonCanonicalResidueError",
     "NotInvertibleError",
     "UnsolvableCongruence",
     "crt",
@@ -45,6 +46,20 @@ class ModularError(ValueError):
     """Base class for invalid input to the modular arithmetic core."""
 
 
+def _show(value: int) -> str:
+    """Decimal text of ``value``, or a size summary when it is too long to convert.
+
+    CPython refuses to turn an int of more than ``sys.get_int_max_str_digits()`` digits
+    (4300 by default) into a string. Error messages go through this helper so that a huge
+    operand can never replace a typed :class:`ModularError` with a bare ``ValueError``.
+    """
+    try:
+        return str(value)
+    except ValueError:
+        sign = "-" if value < 0 else ""
+        return f"<{sign}{value.bit_length()}-bit integer>"
+
+
 class InvalidModulusError(ModularError):
     """Raised when a modulus is not a positive integer."""
 
@@ -56,7 +71,7 @@ class InvalidModulusError(ModularError):
         self.modulus = modulus
 
     def __str__(self) -> str:
-        return f"modulus must be a positive integer, got {self.modulus}"
+        return f"modulus must be a positive integer, got {_show(self.modulus)}"
 
 
 class NotInvertibleError(ModularError):
@@ -74,8 +89,23 @@ class NotInvertibleError(ModularError):
         self.gcd = gcd
 
     def __str__(self) -> str:
-        a, m, g = self.a, self.modulus, self.gcd
+        a, m, g = _show(self.a), _show(self.modulus), _show(self.gcd)
         return f"{a} has no inverse modulo {m}: gcd({a}, {m}) = {g} != 1"
+
+
+class NonCanonicalResidueError(ModularError):
+    """Raised when a :class:`Congruence` is built from a residue outside ``range(modulus)``."""
+
+    def __init__(self, residue: int, modulus: int) -> None:
+        super().__init__(residue, modulus)
+        self.residue = residue
+        self.modulus = modulus
+
+    def __str__(self) -> str:
+        return (
+            f"residue {_show(self.residue)} is not canonical modulo {_show(self.modulus)}; "
+            "use Congruence.of() to reduce it"
+        )
 
 
 class Bezout(NamedTuple):
@@ -156,10 +186,7 @@ class Congruence:
     def __post_init__(self) -> None:
         _require_modulus(self.modulus)
         if not 0 <= self.residue < self.modulus:
-            raise ModularError(
-                f"residue {self.residue} is not canonical modulo {self.modulus}; "
-                "use Congruence.of() to reduce it"
-            )
+            raise NonCanonicalResidueError(self.residue, self.modulus)
 
     @classmethod
     def of(cls, residue: int, modulus: int) -> Congruence:
@@ -184,7 +211,9 @@ class Congruence:
         """
         _require_modulus(modulus)
         if modulus % self.modulus:
-            raise ModularError(f"{modulus} is not a multiple of the class modulus {self.modulus}")
+            raise ModularError(
+                f"{_show(modulus)} is not a multiple of the class modulus {_show(self.modulus)}"
+            )
         return range(self.residue, modulus, self.modulus)
 
     def values_between(self, low: int, high: int) -> range:
